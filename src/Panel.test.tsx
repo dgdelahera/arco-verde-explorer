@@ -70,9 +70,9 @@ it('shows category as text, intro, landmarks and Spanish date', () => {
   expect(screen.getByRole('main')).toBeInTheDocument()
   expect(screen.getByText(/2 rutas oficiales del Arco Verde de la Comunidad de Madrid/)).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Fuente oficial' })).toHaveAttribute('href', data.metadata!.sourceUrl)
-  expect(screen.getByRole('heading', { name: 'Filtros' })).toBeInTheDocument()
+  expect(screen.getByText('Filtros', { selector: 'summary' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Rutas' })).toBeInTheDocument()
-  expect(screen.getByText(/Corta · a 12,3 km/)).toBeInTheDocument()
+  expect(screen.getByText('Corta · Circular · desnivel 80 m · a 12,3 km')).toBeInTheDocument()
   expect(screen.getByText('Categoría', { selector: 'dt' })).toBeInTheDocument()
   expect(screen.getByText(/14 de octubre de 2026/)).toBeInTheDocument()
   expect(screen.getByText('2 de 2 rutas')).toHaveAttribute('aria-live', 'polite')
@@ -83,8 +83,60 @@ it('renders notice above precauciones, directions and the Strava hint', () => {
   const notice = screen.getByText(/TEMPORALMENTE NO SEÑALIZADA/).closest('p')!
   const warn = screen.getByText(/Cruce de carretera/).closest('p')!
   expect(notice.compareDocumentPosition(warn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  expect(screen.getByRole('link', { name: 'Cómo llegar al inicio' })).toHaveAttribute('href', expect.stringContaining('destination=40.6,-3.7'))
+  expect(screen.getByRole('link', { name: 'Cómo llegar al inicio' })).toHaveAttribute('href', expect.stringMatching(/travelmode=transit&destination=40.6,-3.7$/))
+  expect(screen.getByRole('link', { name: 'Volver desde el final' })).toHaveAttribute('href', expect.stringMatching(/travelmode=transit&origin=40.65,-3.6$/))
   expect(screen.getByText(/importarlo en Strava/)).toBeInTheDocument()
+})
+
+it('downloads a named GPX and keeps the original as a secondary link', async () => {
+  let blob: Blob | undefined
+  Object.assign(URL, { createObjectURL: (b: Blob) => { blob = b; return 'blob:gpx' }, revokeObjectURL: () => {} })
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    expect(this.download).toBe('arco-verde-RL2.gpx')
+    expect(this.href).toBe('blob:gpx')
+  })
+  render(<Harness />)
+  fireEvent.click(screen.getByRole('button', { name: 'Descargar GPX' }))
+  expect(click).toHaveBeenCalledOnce()
+  expect(await blob!.text()).toContain('<trk><name>RL2 Camino de Alcobendas</name>')
+  expect(screen.getByRole('link', { name: 'GPX original' })).toHaveAttribute('href', 'https://example.org/rl2.gpx')
+  click.mockRestore()
+})
+
+it('filters by route type with always-visible options', () => {
+  render(<Harness />)
+  expect(screen.getByRole('radio', { name: 'Todas' })).toBeChecked()
+  fireEvent.click(screen.getByRole('radio', { name: 'Circular' }))
+  expect(screen.getAllByRole('listitem')).toHaveLength(1)
+  expect(screen.getByRole('button', { name: /Senda del Arroyo/ })).toBeInTheDocument()
+  expect(screen.getByText('Filtros', { selector: 'summary' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('radio', { name: 'Todas' }))
+  expect(screen.getAllByRole('listitem')).toHaveLength(2)
+})
+
+it('counts active filters in the summary', () => {
+  render(<Harness />)
+  fireEvent.change(screen.getByLabelText(/Buscar/), { target: { value: 'Rozas' } })
+  fireEvent.change(screen.getByLabelText('Categoría'), { target: { value: 'corta' } })
+  expect(screen.getByText('Filtros (2)', { selector: 'summary' })).toBeInTheDocument()
+})
+
+it('moves focus to the route list after clearing filters', () => {
+  render(<Harness />)
+  fireEvent.change(screen.getByLabelText(/Buscar/), { target: { value: 'zzz' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Limpiar filtros' }))
+  expect(screen.getByRole('heading', { name: 'Rutas' })).toHaveFocus()
+})
+
+it('keeps Cerca de mí focusable while locating and ignores clicks', () => {
+  const onLocate = vi.fn()
+  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}}
+    onShowAll={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} />)
+  const btn = screen.getByRole('button', { name: 'Cerca de mí' })
+  expect(btn).not.toBeDisabled()
+  expect(btn).toHaveAttribute('aria-disabled', 'true')
+  fireEvent.click(btn)
+  expect(onLocate).not.toHaveBeenCalled()
 })
 
 it('flags a length mismatch only above 10%', () => {

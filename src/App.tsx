@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
-import { AttributionControl, CircleMarker, MapContainer, Pane, Polyline, TileLayer, useMap, ZoomControl } from 'react-leaflet'
+import { AttributionControl, CircleMarker, MapContainer, Pane, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
 import { emptyFilters, filterRoutes, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
-import { distanceToGeometryMeters, lines, minDistanceToLines } from './geo'
+import { distanceToGeometryMeters, lines, minDistanceToLines, routeEnds, type Position } from './geo'
 import { Panel, type LocateStatus } from './Panel'
 
 const COLORS = { corta: '#0072b2', larga: '#d55e00' }
@@ -15,12 +15,32 @@ const positionsOf = (r: RouteFeature): LatLngTuple[][] =>
 
 type LineProps = { positions: LatLngTuple[][]; category: RouteFeature['properties']['category']; mode: 'normal' | 'selected' | 'dimmed'; casing?: boolean }
 
+function Endpoint({ at, label, color }: { at: Position; label: string; color: string }) {
+  return (
+    <CircleMarker center={[at[1], at[0]]} radius={7} pathOptions={{ color: '#fff', weight: 3, fillColor: color, fillOpacity: 1, interactive: false }}>
+      <Tooltip permanent direction="top" offset={[0, -8]}>{label}</Tooltip>
+    </CircleMarker>
+  )
+}
+
+function Endpoints({ route }: { route: RouteFeature }) {
+  const ends = routeEnds(route.geometry)
+  const type = route.properties.type
+  if (!ends) return null
+  if (type !== 'Lineal') return <Endpoint at={ends.start} label={type === 'Circular' || type === 'Ida y vuelta' ? 'Inicio y fin' : 'Inicio'} color="#1a7f37" />
+  return (
+    <>
+      <Endpoint at={ends.start} label="Inicio" color="#1a7f37" />
+      <Endpoint at={ends.end} label="Fin" color="#b42318" />
+    </>
+  )
+}
+
 const RouteLine = memo(function RouteLine({ positions, category, mode, casing }: LineProps) {
-  const weight = mode === 'selected' ? 7 : 4
-  const opacity = mode === 'dimmed' ? 0.6 : 1
+  const weight = mode === 'selected' ? 7 : mode === 'dimmed' ? 3 : 4
   const pathOptions = useMemo(
-    () => (casing ? { color: '#fff', weight: weight + 3, opacity, interactive: false } : { color: COLORS[category] ?? COLORS.larga, weight, opacity, interactive: false, dashArray: category === 'corta' ? undefined : '10 6' }),
-    [casing, category, weight, opacity],
+    () => (casing ? { color: '#fff', weight: weight + 3, interactive: false } : { color: COLORS[category] ?? COLORS.larga, weight, interactive: false, dashArray: category === 'corta' ? undefined : '10 6' }),
+    [casing, category, weight],
   )
   return <Polyline positions={positions} pathOptions={pathOptions} />
 })
@@ -70,6 +90,8 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
       if (hits.length === 0) return onSelect(null)
       if (hits.length === 1) return onSelect(hits[0].properties.id)
       const box = document.createElement('div')
+      box.setAttribute('role', 'group')
+      box.setAttribute('aria-label', 'Varias rutas aquí')
       const title = document.createElement('p')
       title.textContent = 'Varias rutas aquí:'
       box.append(title)
@@ -86,6 +108,12 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
         box.append(b)
       }
       const pop = popup({ className: 'chooser' }).setLatLng(e.latlng).setContent(box).openOn(map)
+      // Removing the focused popup drops focus to <body> without a focusout, so track whether focus was last inside it.
+      const el = pop.getElement()!
+      let focusInside = false
+      el.addEventListener('focusin', () => { focusInside = true })
+      el.addEventListener('focusout', (ev) => { focusInside = el.contains(ev.relatedTarget as Node | null) })
+      pop.on('remove', () => { if (focusInside) map.getContainer().focus({ preventScroll: true }) })
       const close = pop.getElement()?.querySelector('.leaflet-popup-close-button')
       close?.setAttribute('aria-label', 'Cerrar')
       close?.setAttribute('title', 'Cerrar')
@@ -236,6 +264,7 @@ export default function App() {
           {others.filter((r) => r.properties.category !== 'corta').map((r) => line(r))}
           <Pane name="corta" style={{ zIndex: 410 }}>{others.filter((r) => r.properties.category === 'corta').map((r) => line(r))}</Pane>
           <Pane name="selected" style={{ zIndex: 420 }}>{selected && line(selected)}</Pane>
+          {selected && <Pane name="ends" style={{ zIndex: 425 }}><Endpoints route={selected} /></Pane>}
           {me && (
             <Pane name="me" style={{ zIndex: 430 }}>
               <CircleMarker center={[me[1], me[0]]} radius={8} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a56db', fillOpacity: 1, interactive: false }} />

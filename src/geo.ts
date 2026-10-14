@@ -53,7 +53,33 @@ export function distanceToGeometryMeters(point: Position, geometry: GeoJSON.Geom
   return best
 }
 
-export function startDirectionsUrl(geometry: GeoJSON.Geometry): string | null {
-  const start = lines(geometry)[0]?.[0]
-  return start ? `https://www.google.com/maps/dir/?api=1&destination=${start[1]},${start[0]}&travelmode=walking` : null
+export function routeEnds(geometry: GeoJSON.Geometry): { start: Position; end: Position } | null {
+  const ls = lines(geometry).filter((l) => l.length > 0)
+  if (!ls.length) return null
+  const last = ls[ls.length - 1]
+  return { start: ls[0][0], end: last[last.length - 1] }
+}
+
+const MAPS_DIR = 'https://www.google.com/maps/dir/?api=1&travelmode=transit'
+const latLon = (p: Position) => `${p[1]},${p[0]}`
+
+/** Google Maps transit directions to the start and, for linear routes, back from the end. Loops and out-and-back tracks don't always close, so the official type decides. */
+export function directionsUrls(geometry: GeoJSON.Geometry, type: string | null): { toStart: string; fromEnd: string | null } | null {
+  const ends = routeEnds(geometry)
+  if (!ends) return null
+  return {
+    toStart: `${MAPS_DIR}&destination=${latLon(ends.start)}`,
+    fromEnd: type === 'Lineal' ? `${MAPS_DIR}&origin=${latLon(ends.end)}` : null,
+  }
+}
+
+const xml = (s: string) => s.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`)
+
+export function toGpx(name: string, geometry: GeoJSON.Geometry): string {
+  const segments = lines(geometry)
+    .map((l) => `<trkseg>${l.map(([lon, lat]) => `<trkpt lat="${lat}" lon="${lon}"/>`).join('')}</trkseg>`)
+    .join('')
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Arco Verde Explorer" xmlns="http://www.topografix.com/GPX/1/1"><metadata><name>${xml(name)}</name></metadata><trk><name>${xml(name)}</name>${segments}</trk></gpx>
+`
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { distanceToGeometryMeters, startDirectionsUrl, haversineMeters, lengthMeters, lines, minDistanceToLines } from './geo'
+import { directionsUrls, distanceToGeometryMeters, routeEnds, toGpx, haversineMeters, lengthMeters, lines, minDistanceToLines } from './geo'
 
 const line = (coordinates: number[][]): GeoJSON.LineString => ({ type: 'LineString', coordinates })
 const multi = (coordinates: number[][][]): GeoJSON.MultiLineString => ({ type: 'MultiLineString', coordinates })
@@ -46,13 +46,40 @@ describe('distanceToGeometryMeters', () => {
   })
 })
 
-describe('startDirectionsUrl', () => {
-  it('points at the first coordinate of the first line as lat,lon', () => {
-    expect(startDirectionsUrl(multi([[[-3.9, 40.5], [-3.8, 40.6]], [[1, 2]]]))).toBe(
-      'https://www.google.com/maps/dir/?api=1&destination=40.5,-3.9&travelmode=walking',
-    )
+describe('routeEnds', () => {
+  it('takes the first point of the first line and the last point of the last line', () => {
+    expect(routeEnds(multi([[[-3.9, 40.5], [-3.8, 40.6]], [[1, 2], [3, 4]]]))).toEqual({ start: [-3.9, 40.5], end: [3, 4] })
   })
   it('is null without coordinates', () => {
-    expect(startDirectionsUrl(multi([]))).toBeNull()
+    expect(routeEnds(multi([]))).toBeNull()
+    expect(routeEnds(multi([[]]))).toBeNull()
+  })
+})
+
+describe('directionsUrls', () => {
+  const linear = multi([[[-3.9, 40.5], [-3.8, 40.6]]])
+  it('asks for public transport to the start and back from the end of a one-way route', () => {
+    expect(directionsUrls(linear, 'Lineal')).toEqual({
+      toStart: 'https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=40.5,-3.9',
+      fromEnd: 'https://www.google.com/maps/dir/?api=1&travelmode=transit&origin=40.6,-3.8',
+    })
+  })
+  it('only adds the return link for linear routes, even when a loop track does not close', () => {
+    expect(directionsUrls(linear, 'Circular')!.fromEnd).toBeNull()
+    expect(directionsUrls(linear, 'Ida y vuelta')!.fromEnd).toBeNull()
+    expect(directionsUrls(linear, null)!.fromEnd).toBeNull()
+  })
+  it('is null without coordinates', () => {
+    expect(directionsUrls(multi([]), 'Lineal')).toBeNull()
+  })
+})
+
+describe('toGpx', () => {
+  it('writes a named track with one segment per line and escapes the name', () => {
+    const out = toGpx('RC1 Senda <A & B>', multi([[[-3.9, 40.5], [-3.8, 40.6]], [[1, 2], [3, 4]]]))
+    expect(out).toContain('<trk><name>RC1 Senda &#60;A &#38; B&#62;</name><trkseg><trkpt lat="40.5" lon="-3.9"/><trkpt lat="40.6" lon="-3.8"/></trkseg><trkseg>')
+    expect(out.match(/<trkseg>/g)).toHaveLength(2)
+    expect(out).not.toContain('<ele>')
+    expect(new DOMParser().parseFromString(out, 'application/xml').querySelector('parsererror')).toBeNull()
   })
 })
