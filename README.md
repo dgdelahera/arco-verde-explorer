@@ -1,32 +1,29 @@
-# React + TypeScript + Vite
+# Arco Verde Explorer
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Visor web de los 36 recorridos de [Arco Verde](https://www.comunidad.madrid/medio-ambiente/arco-verde), la infraestructura verde de la Comunidad de Madrid: mapa, listado con filtros, ficha de cada ruta y enlace al GPX original.
 
-Currently, two official plugins are available:
+Es una web estática (React + TypeScript + Leaflet) servida con nginx. No tiene backend.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Datos
 
-## React Compiler
+`npm run data` descarga la página oficial y los GPX, y genera `public/data/routes.geojson` (formato en [docs/data-contract.md](docs/data-contract.md)). El fichero se versiona; vuelve a ejecutarlo cuando la Comunidad actualice las rutas.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Los atributos (nombre, municipios, distancia, desnivel, tipo, sector, precauciones, descripción) se copian tal cual de la página. Lo que no se publica queda vacío.
+- La geometría viene de los GPX oficiales, sin puntos duplicados y simplificada solo para dibujarla. La "longitud calculada" se mide sobre el track sin simplificar y se muestra junto a la distancia oficial. En RL2, RL7, RL9, RL18 y RL22 no coinciden porque los GPX publicados son así.
+- Los GPX oficiales no traen altitud, así que no hay perfil de elevación. Se muestra el desnivel oficial.
+- La descarga enlaza al GPX original en comunidad.madrid, sin modificar.
 
-## Expanding the Oxlint configuration
+Fuente: Comunidad de Madrid, comunidad.madrid/medio-ambiente/arco-verde. Mapa base © OpenStreetMap contributors.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Desarrollo
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci
+npm run dev       # http://localhost:5173
+npm test
+npm run build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Imagen
+
+Cada push a `main` pasa tests, lint y build, crea un tag semver y publica `ghcr.io/dgdelahera/arco-verde-explorer:<tag>`. Las PR solo construyen la imagen. Se despliega desde `dgdelahera/infra-homelab` en https://arco-verde.dgdelahera.com.

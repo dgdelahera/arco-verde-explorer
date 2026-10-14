@@ -39,8 +39,15 @@ const codeOf = (s: string) => {
 }
 
 const num = (s: string) => (/^\d+(,\d+)?$/.test(s) ? Number(s.replace(',', '.')) : null)
-const splitList = (s: string) =>
+const MUNICIPALITY_NAMES: Record<string, string> = {
+  'Las Rozas': 'Las Rozas de Madrid',
+  'las Rozas de Madrid': 'Las Rozas de Madrid',
+  'Rivas Vaciamadrid': 'Rivas-Vaciamadrid',
+  'San Fernando': 'San Fernando de Henares',
+}
+export const splitList = (s: string) =>
   s.replace(/^\(\d+\)\s*/, '').replace(/\.$/, '').split(/\s*,\s*|\s+y\s+/).filter(Boolean)
+    .map((m) => MUNICIPALITY_NAMES[m] ?? m)
 
 const LABELS = ['PLANO', 'TRACKS', 'TÉRMINOS MUNICIPALES', 'TIPO DE RUTA', 'SECTOR', 'DISTANCIA', 'DESNIVEL', 'PRECAUCIONES', 'DESCRIPCIÓN']
 const LABEL_RE = new RegExp(`^(${LABELS.join('|')})\\s*:\\s*`)
@@ -168,8 +175,11 @@ async function fetchText(url: string): Promise<string> {
 async function main() {
   const routes = parsePage(await fetchText(PAGE_URL))
   const missing = routes.filter((r) => !r.gpxUrl).map((r) => r.id)
-  if (routes.length < EXPECTED_ROUTES || missing.length)
-    throw new Error(`Expected ${EXPECTED_ROUTES} routes with GPX, got ${routes.length}; missing GPX: ${missing.join(', ') || 'none'}`)
+  const ids = new Set(routes.map((r) => r.id))
+  if (routes.length !== EXPECTED_ROUTES || ids.size !== routes.length || missing.length)
+    throw new Error(`Expected ${EXPECTED_ROUTES} unique routes with GPX, got ${routes.length} (${ids.size} unique); missing GPX: ${missing.join(', ') || 'none'}`)
+  const unparsed = routes.filter((r) => r.distanceKm === null || r.elevationGainM === null).map((r) => r.id)
+  if (unparsed.length) throw new Error(`Distance or desnivel not numeric for: ${unparsed.join(', ')}`)
 
   const features = []
   for (const r of routes) {

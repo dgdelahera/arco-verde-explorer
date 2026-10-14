@@ -51,7 +51,10 @@ export function parseRoutes(json: unknown): RoutesData {
 }
 
 const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
-const num = (s: string) => (s.trim() === '' ? null : Number(s))
+const num = (s: string) => {
+  const n = Number(s.trim().replace(',', '.'))
+  return s.trim() === '' || !Number.isFinite(n) ? null : n
+}
 
 export function filterRoutes(routes: RouteFeature[], f: Filters): RouteFeature[] {
   const q = norm(f.q.trim())

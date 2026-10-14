@@ -46,16 +46,16 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
       <div id="panel-body" className="panel-body">
         <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
           <label className="wide">Buscar por nombre o municipio
-            <input type="search" value={filters.q} onChange={set('q')} />
+            <input type="search" name="q" value={filters.q} onChange={set('q')} />
           </label>
           <label>Municipio
-            <select value={filters.municipality} onChange={set('municipality')}>
+            <select name="municipality" value={filters.municipality} onChange={set('municipality')}>
               <option value="">Todos</option>
               {municipalities.map((m) => <option key={m}>{m}</option>)}
             </select>
           </label>
           <label>Categoría
-            <select value={filters.category} onChange={set('category')}>
+            <select name="category" value={filters.category} onChange={set('category')}>
               <option value="">Todas</option>
               <option value="corta">Corta</option>
               <option value="larga">Larga</option>
@@ -63,21 +63,21 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
           </label>
           {types.length > 0 && (
             <label>Tipo
-              <select value={filters.type} onChange={set('type')}>
+              <select name="type" value={filters.type} onChange={set('type')}>
                 <option value="">Todos</option>
                 {types.map((t) => <option key={t}>{t}</option>)}
               </select>
             </label>
           )}
           <label>Distancia mín. (km)
-            <input type="number" min="0" step="0.5" inputMode="decimal" value={filters.minKm} onChange={set('minKm')} />
+            <input type="number" min="0" step="0.5" inputMode="decimal" name="minKm" value={filters.minKm} onChange={set('minKm')} />
           </label>
           <label>Distancia máx. (km)
-            <input type="number" min="0" step="0.5" inputMode="decimal" value={filters.maxKm} onChange={set('maxKm')} />
+            <input type="number" min="0" step="0.5" inputMode="decimal" name="maxKm" value={filters.maxKm} onChange={set('maxKm')} />
           </label>
           {hasGain && (
             <label>Desnivel máx. (m)
-              <input type="number" min="0" step="50" inputMode="numeric" value={filters.maxGain} onChange={set('maxGain')} />
+              <input type="number" min="0" step="50" inputMode="numeric" name="maxGain" value={filters.maxGain} onChange={set('maxGain')} />
             </label>
           )}
         </form>

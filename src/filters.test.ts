@@ -30,6 +30,8 @@ describe('filterRoutes', () => {
   it('filters by distance range and max elevation gain', () => {
     expect(ids({ minKm: '10' })).toEqual(['RL2'])
     expect(ids({ maxKm: '10' })).toEqual(['RC1'])
+    expect(ids({ maxKm: '10,5' })).toEqual(['RC1'])
+    expect(ids({ maxKm: 'abc' })).toHaveLength(ids({}).length)
     expect(ids({ maxGain: '100' })).toEqual(['RC1'])
   })
 })

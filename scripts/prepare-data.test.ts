@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { dedupe, parsePage, rdp } from './prepare-data.ts'
+import { dedupe, parsePage, rdp, splitList } from './prepare-data.ts'
 
 // Real excerpt of https://www.comunidad.madrid/medio-ambiente/arco-verde (JSON-LD, 2026-10-14): both tables cut to
 // the RC4, RL8 and RL20 rows plus those three route blocks, unedited.
@@ -58,5 +58,15 @@ describe('rdp', () => {
   })
   it('keeps short lines untouched', () => {
     expect(rdp([[0, 0], [1, 1]], 1)).toEqual([[0, 0], [1, 1]])
+  })
+})
+
+describe('splitList', () => {
+  it('maps spelling variants to one official municipality name', () => {
+    expect(splitList('Las Rozas, Rivas Vaciamadrid y San Fernando')).toEqual([
+      'Las Rozas de Madrid',
+      'Rivas-Vaciamadrid',
+      'San Fernando de Henares',
+    ])
   })
 })
