@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { dedupe, parsePage, rdp, splitList } from './prepare-data.ts'
+import { dedupe, dropContainedLines, headingNotice, parsePage, rdp, splitList } from './prepare-data.ts'
 
 // Real excerpt of https://www.comunidad.madrid/medio-ambiente/arco-verde (JSON-LD, 2026-10-14): both tables cut to
 // the RC4, RL8 and RL20 rows plus those three route blocks, unedited.
@@ -20,6 +20,7 @@ describe('parsePage', () => {
       elevationGainM: 27,
       type: 'Circular',
       sector: '4',
+      notice: null,
       warnings: null,
       gpxUrl: 'https://www.comunidad.madrid/docs/assets/2026/03/17/rc4.gpx?VersionId=oEIH3CGAVYaOTefzU5rb1yH2pLZ5DvAI',
       planUrl: 'https://www.comunidad.madrid/docs/assets/2026/03/17/rc04_ruta_perfil.pdf?VersionId=RJ6fowuAYYIrH_.wy2Jaf6v_gtKjVHYu',
@@ -68,5 +69,38 @@ describe('splitList', () => {
       'Rivas-Vaciamadrid',
       'San Fernando de Henares',
     ])
+  })
+})
+
+describe('headingNotice', () => {
+  it('extracts the official warning after the route name, verbatim', () => {
+    expect(headingNotice('RC8 UPM Montegancedo - Valle de las Cañas - UCM Somosaguas, ida y vuelta. TEMPORALMENTE NO SEÑALIZADA.')).toBe('TEMPORALMENTE NO SEÑALIZADA.')
+    expect(headingNotice('RL10 Ruta Circular Pozuelo de Alarcón-Campamento (Madrid). RUTA TEMPORALMENTE SI SEÑALIZACIÓN')).toBe('RUTA TEMPORALMENTE SI SEÑALIZACIÓN')
+    expect(headingNotice('RL11 Hoyo de Manzanares – Puente de la Marmota – Colmenar Viejo. ATENCIÓN, ZONA EXTREMADAMENTE TÉCNICA EN LAS CERCANÍAS DEL PUENTE DE LA MARMOTA')).toBe(
+      'ATENCIÓN, ZONA EXTREMADAMENTE TÉCNICA EN LAS CERCANÍAS DEL PUENTE DE LA MARMOTA',
+    )
+  })
+  it('is null for plain headings, including ones with capitals or a trailing period', () => {
+    expect(headingNotice('RL19 CIRCULAR NORTE ARCO VERDE. Montecarmelo - Monte Viñuelas (Cementerio Parcesa) – Dehesa Boyal')).toBeNull()
+    expect(headingNotice('RL20 GRAN ANILLO ARCO VERDE')).toBeNull()
+    expect(headingNotice('RC12 Circular Dehesa Boyal, San Sebastián de los Reyes.')).toBeNull()
+    expect(headingNotice('RC4 Parla – Parque Forestal La Cantueña')).toBeNull()
+  })
+})
+
+// Real points from the official RL7 GPX (13 segments, 12 of them repeat part of the 742-point one) and RL18.
+const RL7_LONG = [[-3.8177337121883954, 40.37519159244737], [-3.8177337121883954, 40.37519159244737], [-3.8177454423728148, 40.37519159238235], [-3.8177454423728148, 40.37519159238235], [-3.817954916850809, 40.375339683954124], [-3.817954916850809, 40.375339683954124], [-3.8182565612512263, 40.37560139760536], [-3.8182565612512263, 40.37560139760536], [-3.8183186128507414, 40.375670487795446], [-3.8183186128507414, 40.375670487795446], [-3.8183286209252976, 40.375665230454196]]
+const RL7_PIECE = [[-3.8183186128507414, 40.375670487795446], [-3.8182565612512263, 40.37560139760536], [-3.817954916850809, 40.375339683954124], [-3.8177454423728148, 40.37519159238235]]
+const RL18_OTHER = [[-3.63078291734093, 40.569731695092706], [-3.630799382399456, 40.56978883286436]]
+
+describe('dropContainedLines', () => {
+  it('drops a segment that repeats part of another, whatever the order', () => {
+    expect(dropContainedLines([RL7_PIECE, RL7_LONG])).toEqual([RL7_LONG])
+    expect(dropContainedLines([RL7_LONG, RL7_PIECE])).toEqual([RL7_LONG])
+  })
+  it('keeps distinct segments, and a line that only partly overlaps', () => {
+    expect(dropContainedLines([RL7_LONG, RL18_OTHER])).toEqual([RL7_LONG, RL18_OTHER])
+    const extended = [...RL7_PIECE, [-3.80, 40.37]]
+    expect(dropContainedLines([RL7_LONG, extended])).toEqual([RL7_LONG, extended])
   })
 })
