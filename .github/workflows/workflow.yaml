@@ -8,10 +8,6 @@ on:
     branches:
       - 'main'
 
-permissions:
-  contents: write
-  packages: write
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -19,10 +15,12 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: npm
@@ -34,14 +32,17 @@ jobs:
   build:
     needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # github-tag-action pushes the version tag
+      packages: write # push to ghcr.io
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.11.1
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
       - name: Log into registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3.6.0
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -49,20 +50,24 @@ jobs:
       - name: Bump version and push tag
         if: github.event_name != 'pull_request'
         id: tag_version
-        uses: mathieudutour/github-tag-action@v6.2
+        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b # v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Get Docker tag
         id: get-docker-tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          NEW_TAG: ${{ steps.tag_version.outputs.new_tag }}
         run: |
-          if [ ${{ github.event_name }} == 'pull_request' ]; then
-            tag="pr-${{ github.event.pull_request.number }}"
+          if [ "$EVENT_NAME" = 'pull_request' ]; then
+            tag="pr-${PR_NUMBER}"
           else
-            tag="${{ steps.tag_version.outputs.new_tag }}"
+            tag="$NEW_TAG"
           fi
-          echo "tag=${tag}" >> $GITHUB_OUTPUT
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6.18.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
