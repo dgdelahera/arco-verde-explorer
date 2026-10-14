@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { distinct, emptyFilters, lengthMismatch, type Filters, type RouteFeature, type RoutesData } from './filters'
 import { startDirectionsUrl } from './geo'
 
-export type LocateStatus = 'idle' | 'loading' | 'denied' | 'error' | 'unsupported'
+export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
 const LOCATE_MESSAGES: Partial<Record<LocateStatus, string>> = {
   loading: 'Buscando tu ubicación…',
+  done: 'Rutas ordenadas por cercanía',
   denied: 'No se pudo obtener tu ubicación: has denegado el permiso. Actívalo en el navegador para ordenar por cercanía.',
   error: 'No se pudo obtener tu ubicación. Inténtalo de nuevo.',
   unsupported: 'Tu navegador no permite obtener la ubicación.',
@@ -60,7 +61,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
           {open ? 'Ocultar panel' : 'Mostrar panel'}
         </button>
         <button type="button" className="sheet-toggle" aria-pressed={full} onClick={() => { setFull(!full); setOpen(true) }}>
-          {full ? 'Reducir' : 'Ampliar'}
+          Ampliar panel
         </button>
       </header>
 
@@ -112,8 +113,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
         <div className="nearby">
           <button type="button" onClick={onLocate} disabled={locateStatus === 'loading'}>Cerca de mí</button>
-          {distances && <span className="note">Ordenadas por cercanía a tu ubicación.</span>}
-          {LOCATE_MESSAGES[locateStatus] && <p role={locateStatus === 'loading' ? 'status' : 'alert'} className="locate-msg">{LOCATE_MESSAGES[locateStatus]}</p>}
+          <p role="status" className="locate-msg" data-error={locateStatus !== 'idle' && locateStatus !== 'loading' && locateStatus !== 'done'}>{LOCATE_MESSAGES[locateStatus]}</p>
         </div>
 
         <h2 className="section-title">Rutas</h2>
@@ -161,18 +161,26 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 function Details({ route }: { route: RouteFeature }) {
   const p = route.properties
   const [more, setMore] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [shareMsg, setShareMsg] = useState('')
   const directions = startDirectionsUrl(route.geometry)
   const long = (p.description?.length ?? 0) > 280
+  useEffect(() => {
+    if (!shareMsg) return
+    const t = setTimeout(() => setShareMsg(''), 3000)
+    return () => clearTimeout(t)
+  }, [shareMsg])
   const share = async () => {
     const url = `${location.href.split('#')[0]}#${p.id}`
+    if (navigator.share) {
+      try { return await navigator.share({ title: p.name, url }) } catch (e) { if ((e as Error).name === 'AbortError') return }
+    }
     try {
-      if (navigator.share) await navigator.share({ title: p.name, url })
-      else {
-        await navigator.clipboard.writeText(url)
-        setCopied(true)
-      }
-    } catch { /* share cancelled or clipboard blocked */ }
+      await navigator.clipboard.writeText(url)
+      setShareMsg('Enlace copiado')
+    } catch {
+      window.prompt('Copia el enlace', url)
+      setShareMsg('No se pudo copiar el enlace')
+    }
   }
   return (
     <article className="details" aria-label={`Detalles de ${p.name}`}>
@@ -182,7 +190,7 @@ function Details({ route }: { route: RouteFeature }) {
         {p.planUrl && <a className="btn" href={p.planUrl} target="_blank" rel="noopener noreferrer">Plano (PDF)</a>}
         {directions && <a className="btn" href={directions} target="_blank" rel="noopener noreferrer">Cómo llegar al inicio</a>}
         <button type="button" onClick={share}>Compartir</button>
-        <span role="status" className="note">{copied && 'Enlace copiado'}</span>
+        <span role="status" className="note">{shareMsg}</span>
       </div>
       <p className="note">Puedes importarlo en Strava (web: Mis rutas → Crear ruta → subir archivo) o abrirlo con Wikiloc, OsmAnd u otra app de rutas.</p>
       {p.notice && <p className="warnings" role="note"><strong>Aviso oficial:</strong> {p.notice}</p>}

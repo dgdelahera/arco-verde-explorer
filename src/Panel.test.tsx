@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest'
 import { useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { emptyFilters, filterRoutes, parseRoutes } from './filters'
-import { Panel } from './Panel'
+import { Panel, type LocateStatus } from './Panel'
 import { fixture } from './test/fixture'
 
 afterEach(cleanup)
@@ -15,13 +16,13 @@ const withProps = (id: string, extra: object) => ({
   routes: data.routes.map((r) => (r.properties.id === id ? { ...r, properties: { ...r.properties, ...extra } } : r)),
 })
 
-function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null }: {
-  onSelect?: (id: string | null) => void; selectedId?: string | null; d?: typeof data; distances?: Map<string, number> | null
+function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle' }: {
+  onSelect?: (id: string | null) => void; selectedId?: string | null; d?: typeof data; distances?: Map<string, number> | null; locateStatus?: LocateStatus
 }) {
   const [filters, setFilters] = useState(emptyFilters)
   return (
     <Panel data={d} visible={filterRoutes(d.routes, filters)} filters={filters} onFiltersChange={setFilters}
-      selectedId={selectedId} onSelect={onSelect} onShowAll={() => {}} distances={distances} locateStatus="idle" onLocate={() => {}} />
+      selectedId={selectedId} onSelect={onSelect} onShowAll={() => {}} distances={distances} locateStatus={locateStatus} onLocate={() => {}} />
   )
 }
 
@@ -110,4 +111,62 @@ it('copies the share link when navigator.share is missing', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Compartir' }))
   expect(await screen.findByText('Enlace copiado')).toBeInTheDocument()
   expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/#RL2$/))
+})
+
+const share = () => fireEvent.click(screen.getByRole('button', { name: 'Compartir' }))
+
+it('falls back to clipboard when navigator.share rejects with a non-abort error', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.assign(navigator, { clipboard: { writeText }, share: vi.fn().mockRejectedValue(new Error('boom')) })
+  render(<Harness />)
+  share()
+  expect(await screen.findByText('Enlace copiado')).toBeInTheDocument()
+})
+
+it('does nothing when the share sheet is dismissed', async () => {
+  const writeText = vi.fn()
+  Object.assign(navigator, { clipboard: { writeText }, share: vi.fn().mockRejectedValue(new DOMException('x', 'AbortError')) })
+  render(<Harness />)
+  share()
+  await act(async () => {})
+  expect(writeText).not.toHaveBeenCalled()
+})
+
+it('prompts with the link and reports failure when the clipboard is unavailable', async () => {
+  const prompt = vi.spyOn(window, 'prompt').mockReturnValue(null)
+  Object.assign(navigator, { clipboard: undefined, share: undefined })
+  render(<Harness />)
+  share()
+  expect(await screen.findByText('No se pudo copiar el enlace')).toBeInTheDocument()
+  expect(prompt).toHaveBeenCalledWith('Copia el enlace', expect.stringMatching(/#RL2$/))
+  prompt.mockRestore()
+})
+
+it('clears the share message after 3 seconds', async () => {
+  vi.useFakeTimers()
+  Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) }, share: undefined })
+  render(<Harness />)
+  share()
+  await act(async () => {})
+  expect(screen.getByText('Enlace copiado')).toBeInTheDocument()
+  act(() => { vi.advanceTimersByTime(3000) })
+  expect(screen.queryByText('Enlace copiado')).toBeNull()
+  vi.useRealTimers()
+})
+
+it('keeps one live region for locate status and announces success', () => {
+  const { rerender } = render(<Harness />)
+  const region = screen.getAllByRole('status').find((el) => el.classList.contains('locate-msg'))!
+  rerender(<Harness locateStatus="done" />)
+  expect(region).toHaveTextContent('Rutas ordenadas por cercanía')
+  rerender(<Harness locateStatus="denied" />)
+  expect(region).toHaveTextContent(/denegado/)
+})
+
+it('uses a fixed label with aria-pressed for the size toggle', () => {
+  render(<Harness />)
+  const btn = screen.getByRole('button', { name: 'Ampliar panel' })
+  expect(btn).toHaveAttribute('aria-pressed', 'false')
+  fireEvent.click(btn)
+  expect(screen.getByRole('button', { name: 'Ampliar panel' })).toHaveAttribute('aria-pressed', 'true')
 })

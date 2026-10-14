@@ -17,9 +17,9 @@ type LineProps = { positions: LatLngTuple[][]; category: RouteFeature['propertie
 
 const RouteLine = memo(function RouteLine({ positions, category, mode, casing }: LineProps) {
   const weight = mode === 'selected' ? 7 : 4
-  const opacity = mode === 'dimmed' ? 0.35 : 1
+  const opacity = mode === 'dimmed' ? 0.6 : 1
   const pathOptions = useMemo(
-    () => (casing ? { color: '#fff', weight: weight + 3, opacity, interactive: false } : { color: COLORS[category] ?? COLORS.larga, weight, opacity, interactive: false }),
+    () => (casing ? { color: '#fff', weight: weight + 3, opacity, interactive: false } : { color: COLORS[category] ?? COLORS.larga, weight, opacity, interactive: false, dashArray: category === 'corta' ? undefined : '10 6' }),
     [casing, category, weight, opacity],
   )
   return <Polyline positions={positions} pathOptions={pathOptions} />
@@ -27,7 +27,11 @@ const RouteLine = memo(function RouteLine({ positions, category, mode, casing }:
 
 function MapSetup() {
   const map = useMap()
-  useEffect(() => { map.getContainer().setAttribute('aria-label', 'Mapa de rutas') }, [map])
+  useEffect(() => {
+    const c = map.getContainer()
+    c.setAttribute('role', 'group')
+    c.setAttribute('aria-label', 'Mapa interactivo de rutas. Usa las flechas para desplazarlo')
+  }, [map])
   return null
 }
 
@@ -74,28 +78,43 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
         b.type = 'button'
         b.className = 'chooser-item'
         b.textContent = `${r.properties.id} · ${r.properties.name}`
-        b.onclick = () => { map.closePopup(); onSelect(r.properties.id) }
+        b.onclick = () => {
+          map.closePopup()
+          onSelect(r.properties.id)
+          setTimeout(() => document.querySelector<HTMLElement>(`#route-${CSS.escape(r.properties.id)} .route-item`)?.focus(), 0)
+        }
         box.append(b)
       }
-      popup({ className: 'chooser' }).setLatLng(e.latlng).setContent(box).openOn(map)
+      const pop = popup({ className: 'chooser' }).setLatLng(e.latlng).setContent(box).openOn(map)
+      const close = pop.getElement()?.querySelector('.leaflet-popup-close-button')
+      close?.setAttribute('aria-label', 'Cerrar')
+      close?.setAttribute('title', 'Cerrar')
+      box.querySelector('button')?.focus()
     }
+    let last: L.LeafletMouseEvent
     const onMove = (e: L.LeafletMouseEvent) => {
+      last = e
       if (frame) return
       frame = requestAnimationFrame(() => {
         frame = 0
-        const hit = hitTest(map, visible, geoms, e.containerPoint, tol)[0]
+        const hit = hitTest(map, visible, geoms, last.containerPoint, tol)[0]
         map.getContainer().style.cursor = hit ? 'pointer' : ''
         if (!hit) return void tip.remove()
         tip.setContent(`${hit.properties.id} · ${hit.properties.name}`)
-        tip.setLatLng(e.latlng).addTo(map)
+        tip.setLatLng(last.latlng).addTo(map)
       })
     }
     const onOut = () => { cancelAnimationFrame(frame); frame = 0; map.getContainer().style.cursor = ''; tip.remove() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') tip.remove() }
+    document.addEventListener('keydown', onKey)
     map.on('click', onClick)
     if (!coarse) { map.on('mousemove', onMove); map.on('mouseout', onOut) }
     return () => {
       cancelAnimationFrame(frame)
+      document.removeEventListener('keydown', onKey)
       map.off('click', onClick).off('mousemove', onMove).off('mouseout', onOut)
+      map.getContainer().style.cursor = ''
+      map.closePopup()
       tip.remove()
     }
   }, [map, visible, geoms, onSelect])
@@ -146,13 +165,6 @@ export default function App() {
   const visible = useMemo(() => (data ? filterRoutes(data.routes, filters) : []), [data, filters])
   const selected = visible.find((r) => r.properties.id === selectedId) ?? null
   const selectedBounds = selected ? geoms.get(selected.properties.id)!.bounds : null
-  const bounds = useMemo(() => {
-    if (selectedBounds) return selectedBounds
-    const all = latLngBounds([])
-    for (const r of visible) all.extend(geoms.get(r.properties.id)!.bounds)
-    return all
-  }, [selectedBounds, visible, geoms])
-
   const distances = useMemo(
     () => (me && data ? new Map(data.routes.map((r) => [r.properties.id, distanceToGeometryMeters(me, r.geometry) / 1000])) : null),
     [me, data],
@@ -162,11 +174,25 @@ export default function App() {
     [visible, distances],
   )
 
+  const nearest = me && listed[0] ? geoms.get(listed[0].properties.id)!.bounds : null
+  const bounds = useMemo(() => {
+    if (selectedBounds) return selectedBounds
+    const all = latLngBounds([])
+    if (me && nearest) return all.extend(nearest).extend([me[1], me[0]])
+    for (const r of visible) all.extend(geoms.get(r.properties.id)!.bounds)
+    return all
+  }, [selectedBounds, visible, geoms, me, nearest])
+
+  const changeFilters = (f: typeof filters) => {
+    setFilters(f)
+    if (selectedId && !filterRoutes(data!.routes, f).some((r) => r.properties.id === selectedId)) select(null)
+  }
+
   const locate = () => {
     if (!navigator.geolocation) return setLocateStatus('unsupported')
     setLocateStatus('loading')
     navigator.geolocation.getCurrentPosition(
-      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('idle') },
+      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('done'); setFitNonce((n) => n + 1) },
       (e) => setLocateStatus(e.code === e.PERMISSION_DENIED ? 'denied' : 'error'),
       { timeout: 15000 },
     )
@@ -192,7 +218,7 @@ export default function App() {
         data={data}
         visible={listed}
         filters={filters}
-        onFiltersChange={setFilters}
+        onFiltersChange={changeFilters}
         selectedId={selected?.properties.id ?? null}
         onSelect={select}
         onShowAll={() => { setFilters(emptyFilters); select(null); setFitNonce((n) => n + 1) }}

@@ -53,7 +53,7 @@ button:hover { background: #e8e8e8; }
 .legend { display: inline-flex; align-items: center; gap: 0.3rem; }
 .swatch { display: inline-block; width: 1rem; height: 0.3rem; border-radius: 2px; }
 .swatch.corta { background: var(--corta); }
-.swatch.larga { background: var(--larga); }
+.swatch.larga { background: repeating-linear-gradient(90deg, var(--larga) 0 6px, transparent 6px 9px); }
 
 .route-list { list-style: none; margin: 0; padding: 0; }
 .route-list li { margin-bottom: 0.35rem; }
@@ -79,7 +79,8 @@ button:hover { background: #e8e8e8; }
 .intro { font-size: 0.9rem; margin: 0 0 0.5rem; }
 .section-title { font-size: 0.95rem; margin: 0.75rem 0 0.4rem; color: var(--muted); }
 .nearby { margin-top: 0.5rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.locate-msg { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: #8a1c1c; }
+.locate-msg { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: var(--muted); }
+.locate-msg[data-error='true'] { color: #8a1c1c; }
 .empty { padding: 0.5rem 0 1rem; }
 .route-meta { display: block; font-weight: 400; color: var(--muted); }
 .chooser p { margin: 0 0 0.4rem; font-weight: 600; }
