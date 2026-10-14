@@ -1,23 +1,123 @@
-import { useEffect, useMemo, useState } from 'react'
-import { latLngBounds, type LatLngBounds, type LatLngTuple } from 'leaflet'
-import { MapContainer, Pane, Polyline, TileLayer, useMap } from 'react-leaflet'
-import { emptyFilters, filterRoutes, parseRoutes, type RouteFeature, type RoutesData } from './filters'
-import { lines } from './geo'
-import { Panel } from './Panel'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
+import { AttributionControl, CircleMarker, MapContainer, Pane, Polyline, TileLayer, useMap, ZoomControl } from 'react-leaflet'
+import { emptyFilters, filterRoutes, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
+import { distanceToGeometryMeters, lines, minDistanceToLines } from './geo'
+import { Panel, type LocateStatus } from './Panel'
 
 const COLORS = { corta: '#0072b2', larga: '#d55e00' }
+const media = (q: string) => matchMedia(q).matches
 
-const positions = (r: RouteFeature): LatLngTuple[][] =>
+type Geo = { positions: LatLngTuple[][]; bounds: LatLngBounds }
+
+const positionsOf = (r: RouteFeature): LatLngTuple[][] =>
   lines(r.geometry).map((l) => l.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])).map(([lon, lat]) => [lat, lon]))
-const boundsOf = (routes: RouteFeature[]) => latLngBounds(routes.flatMap(positions).flat())
+
+type LineProps = { positions: LatLngTuple[][]; category: RouteFeature['properties']['category']; mode: 'normal' | 'selected' | 'dimmed'; casing?: boolean }
+
+const RouteLine = memo(function RouteLine({ positions, category, mode, casing }: LineProps) {
+  const weight = mode === 'selected' ? 7 : 4
+  const opacity = mode === 'dimmed' ? 0.6 : 1
+  const pathOptions = useMemo(
+    () => (casing ? { color: '#fff', weight: weight + 3, opacity, interactive: false } : { color: COLORS[category] ?? COLORS.larga, weight, opacity, interactive: false, dashArray: category === 'corta' ? undefined : '10 6' }),
+    [casing, category, weight, opacity],
+  )
+  return <Polyline positions={positions} pathOptions={pathOptions} />
+})
+
+function MapSetup() {
+  const map = useMap()
+  useEffect(() => {
+    const c = map.getContainer()
+    c.setAttribute('role', 'group')
+    c.setAttribute('aria-label', 'Mapa interactivo de rutas. Usa las flechas para desplazarlo')
+  }, [map])
+  return null
+}
 
 function FitBounds({ bounds, nonce }: { bounds: LatLngBounds; nonce: number }) {
   const map = useMap()
   useEffect(() => {
     if (!bounds.isValid()) return
-    const sheet = matchMedia('(max-width: 767px)').matches ? (document.querySelector<HTMLElement>('.panel')?.offsetHeight ?? 0) : 0
-    map.fitBounds(bounds, { paddingTopLeft: [24, 24], paddingBottomRight: [24, 24 + sheet] })
+    const sheet = media('(max-width: 767px)') ? (document.querySelector<HTMLElement>('.panel')?.offsetHeight ?? 0) : 0
+    map.fitBounds(bounds, { paddingTopLeft: [24, 24], paddingBottomRight: [24, 24 + sheet], animate: !media('(prefers-reduced-motion: reduce)') })
   }, [map, bounds, nonce])
+  return null
+}
+
+function hitTest(map: LeafletMap, routes: RouteFeature[], geoms: Map<string, Geo>, at: { x: number; y: number }, tol: number) {
+  const around = latLngBounds([map.containerPointToLatLng([at.x - tol, at.y - tol]), map.containerPointToLatLng([at.x + tol, at.y + tol])])
+  const hits: { route: RouteFeature; d: number }[] = []
+  for (const route of routes) {
+    const g = geoms.get(route.properties.id)!
+    if (!g.bounds.intersects(around)) continue
+    const px = g.positions.map((l) => l.map((ll) => { const p = map.latLngToContainerPoint(ll); return [p.x, p.y] }))
+    const d = minDistanceToLines([at.x, at.y], px)
+    if (d <= tol) hits.push({ route, d })
+  }
+  return hits.sort((a, b) => a.d - b.d).map((h) => h.route)
+}
+
+function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms: Map<string, Geo>; onSelect: (id: string | null) => void }) {
+  const map = useMap()
+  useEffect(() => {
+    const coarse = media('(pointer: coarse)')
+    const tol = coarse ? 18 : 12
+    const tip = tooltip({ direction: 'top', offset: [0, -6] })
+    let frame = 0
+    const onClick = (e: L.LeafletMouseEvent) => {
+      const hits = hitTest(map, visible, geoms, e.containerPoint, tol)
+      if (hits.length === 0) return onSelect(null)
+      if (hits.length === 1) return onSelect(hits[0].properties.id)
+      const box = document.createElement('div')
+      const title = document.createElement('p')
+      title.textContent = 'Varias rutas aquí:'
+      box.append(title)
+      for (const r of hits) {
+        const b = document.createElement('button')
+        b.type = 'button'
+        b.className = 'chooser-item'
+        b.textContent = `${r.properties.id} · ${r.properties.name}`
+        b.onclick = () => {
+          map.closePopup()
+          onSelect(r.properties.id)
+          setTimeout(() => document.querySelector<HTMLElement>(`#route-${CSS.escape(r.properties.id)} .route-item`)?.focus(), 0)
+        }
+        box.append(b)
+      }
+      const pop = popup({ className: 'chooser' }).setLatLng(e.latlng).setContent(box).openOn(map)
+      const close = pop.getElement()?.querySelector('.leaflet-popup-close-button')
+      close?.setAttribute('aria-label', 'Cerrar')
+      close?.setAttribute('title', 'Cerrar')
+      box.querySelector('button')?.focus()
+    }
+    let last: L.LeafletMouseEvent
+    const onMove = (e: L.LeafletMouseEvent) => {
+      last = e
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const hit = hitTest(map, visible, geoms, last.containerPoint, tol)[0]
+        map.getContainer().style.cursor = hit ? 'pointer' : ''
+        if (!hit) return void tip.remove()
+        tip.setContent(`${hit.properties.id} · ${hit.properties.name}`)
+        tip.setLatLng(last.latlng).addTo(map)
+      })
+    }
+    const onOut = () => { cancelAnimationFrame(frame); frame = 0; map.getContainer().style.cursor = ''; tip.remove() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') tip.remove() }
+    document.addEventListener('keydown', onKey)
+    map.on('click', onClick)
+    if (!coarse) { map.on('mousemove', onMove); map.on('mouseout', onOut) }
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('keydown', onKey)
+      map.off('click', onClick).off('mousemove', onMove).off('mouseout', onOut)
+      map.getContainer().style.cursor = ''
+      map.closePopup()
+      tip.remove()
+    }
+  }, [map, visible, geoms, onSelect])
   return null
 }
 
@@ -27,6 +127,8 @@ export default function App() {
   const [filters, setFilters] = useState(emptyFilters)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [fitNonce, setFitNonce] = useState(0)
+  const [me, setMe] = useState<[number, number] | null>(null)
+  const [locateStatus, setLocateStatus] = useState<LocateStatus>('idle')
 
   useEffect(() => {
     fetch('/data/routes.geojson')
@@ -34,53 +136,115 @@ export default function App() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return res.json()
       })
-      .then((json) => setData(parseRoutes(json)))
+      .then((json) => {
+        const d = parseRoutes(json)
+        setData(d)
+        setSelectedId(routeIdFromHash(location.hash, d.routes.map((r) => r.properties.id)))
+      })
       .catch((e: Error) => setError(e.message))
   }, [])
 
+  useEffect(() => {
+    if (!data) return
+    const ids = data.routes.map((r) => r.properties.id)
+    const onHash = () => setSelectedId(routeIdFromHash(location.hash, ids))
+    addEventListener('hashchange', onHash)
+    return () => removeEventListener('hashchange', onHash)
+  }, [data])
+
+  const select = useCallback((id: string | null) => {
+    setSelectedId(id)
+    if (id) location.hash = id
+    else if (location.hash) history.pushState(null, '', location.pathname + location.search)
+  }, [])
+
+  const geoms = useMemo(
+    () => new Map((data?.routes ?? []).map((r) => { const positions = positionsOf(r); return [r.properties.id, { positions, bounds: latLngBounds(positions.flat()) }] as const })),
+    [data],
+  )
   const visible = useMemo(() => (data ? filterRoutes(data.routes, filters) : []), [data, filters])
-  const selected = data?.routes.find((r) => r.properties.id === selectedId) ?? null
-  const bounds = useMemo(() => boundsOf(selected ? [selected] : (data?.routes ?? [])), [selected, data])
+  const selected = visible.find((r) => r.properties.id === selectedId) ?? null
+  const selectedBounds = selected ? geoms.get(selected.properties.id)!.bounds : null
+  const distances = useMemo(
+    () => (me && data ? new Map(data.routes.map((r) => [r.properties.id, distanceToGeometryMeters(me, r.geometry) / 1000])) : null),
+    [me, data],
+  )
+  const listed = useMemo(
+    () => (distances ? [...visible].sort((a, b) => distances.get(a.properties.id)! - distances.get(b.properties.id)!) : visible),
+    [visible, distances],
+  )
+
+  const nearest = me && listed[0] ? geoms.get(listed[0].properties.id)!.bounds : null
+  const bounds = useMemo(() => {
+    if (selectedBounds) return selectedBounds
+    const all = latLngBounds([])
+    if (me && nearest) return all.extend(nearest).extend([me[1], me[0]])
+    for (const r of visible) all.extend(geoms.get(r.properties.id)!.bounds)
+    return all
+  }, [selectedBounds, visible, geoms, me, nearest])
+
+  const changeFilters = (f: typeof filters) => {
+    setFilters(f)
+    if (selectedId && !filterRoutes(data!.routes, f).some((r) => r.properties.id === selectedId)) select(null)
+  }
+
+  const locate = () => {
+    if (!navigator.geolocation) return setLocateStatus('unsupported')
+    setLocateStatus('loading')
+    navigator.geolocation.getCurrentPosition(
+      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('done'); setFitNonce((n) => n + 1) },
+      (e) => setLocateStatus(e.code === e.PERMISSION_DENIED ? 'denied' : 'error'),
+      { timeout: 15000 },
+    )
+  }
 
   if (error) return <p className="status" role="alert">No se pudieron cargar las rutas ({error}). Recarga la página o inténtalo más tarde.</p>
   if (!data) return <p className="status" role="status">Cargando rutas…</p>
 
-  const line = (r: RouteFeature) => {
-    const isSelected = r === selected
-    return (
-      <Polyline
-        key={r.properties.id}
-        positions={positions(r)}
-        pathOptions={{
-          color: COLORS[r.properties.category] ?? COLORS.larga,
-          weight: isSelected ? 7 : 4,
-          opacity: selected && !isSelected ? 0.35 : 0.9,
-        }}
-        eventHandlers={{ click: () => setSelectedId(r.properties.id) }}
-      />
-    )
-  }
+  const line = (r: RouteFeature, casing?: boolean) => (
+    <RouteLine
+      key={r.properties.id}
+      positions={geoms.get(r.properties.id)!.positions}
+      category={r.properties.category}
+      mode={!selected ? 'normal' : r === selected ? 'selected' : 'dimmed'}
+      casing={casing}
+    />
+  )
   const others = visible.filter((r) => r !== selected)
+  const reduce = media('(prefers-reduced-motion: reduce)')
   return (
     <div className="layout">
       <Panel
         data={data}
-        visible={visible}
+        visible={listed}
         filters={filters}
-        onFiltersChange={setFilters}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        onShowAll={() => { setSelectedId(null); setFitNonce((n) => n + 1) }}
+        onFiltersChange={changeFilters}
+        selectedId={selected?.properties.id ?? null}
+        onSelect={select}
+        onShowAll={() => { setFilters(emptyFilters); select(null); setFitNonce((n) => n + 1) }}
+        distances={distances}
+        locateStatus={locateStatus}
+        onLocate={locate}
       />
-      <main className="map" aria-label="Mapa de las rutas del Arco Verde. La lista del panel ofrece la misma información en texto.">
-        <MapContainer bounds={bounds} className="leaflet-map">
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="© OpenStreetMap contributors" />
-          {others.filter((r) => r.properties.category !== 'corta').map(line)}
-          <Pane name="corta" style={{ zIndex: 410 }}>{others.filter((r) => r.properties.category === 'corta').map(line)}</Pane>
-          <Pane name="selected" style={{ zIndex: 420 }}>{selected && visible.includes(selected) && line(selected)}</Pane>
+      <section className="map" aria-label="Mapa de rutas">
+        <MapContainer bounds={bounds} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
+          <MapSetup />
+          <ZoomControl zoomInTitle="Acercar" zoomOutTitle="Alejar" />
+          <AttributionControl position={media('(max-width: 767px)') ? 'topright' : 'bottomright'} />
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
+          <Pane name="casing" style={{ zIndex: 395 }}>{visible.map((r) => line(r, true))}</Pane>
+          {others.filter((r) => r.properties.category !== 'corta').map((r) => line(r))}
+          <Pane name="corta" style={{ zIndex: 410 }}>{others.filter((r) => r.properties.category === 'corta').map((r) => line(r))}</Pane>
+          <Pane name="selected" style={{ zIndex: 420 }}>{selected && line(selected)}</Pane>
+          {me && (
+            <Pane name="me" style={{ zIndex: 430 }}>
+              <CircleMarker center={[me[1], me[0]]} radius={8} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a56db', fillOpacity: 1, interactive: false }} />
+            </Pane>
+          )}
+          <Picking visible={visible} geoms={geoms} onSelect={select} />
           <FitBounds bounds={bounds} nonce={fitNonce} />
         </MapContainer>
-      </main>
+      </section>
     </div>
   )
 }

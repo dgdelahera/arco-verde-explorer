@@ -18,6 +18,7 @@ export type PageRoute = {
   elevationGainM: number | null
   type: string | null
   sector: string | null
+  notice: string | null
   warnings: string | null
   description: string | null
   gpxUrl: string | null
@@ -69,6 +70,12 @@ export function parseDetail(html: string): Record<string, { paragraphs: string[]
   return sections
 }
 
+/** Warning appended to a route heading after its name, e.g. "... ida y vuelta. TEMPORALMENTE NO SEÑALIZADA." (all caps, own sentence). */
+export function headingNotice(heading: string): string | null {
+  const tail = /\.\s+([^.]+\.?)$/.exec(heading.trim())?.[1]
+  return tail && tail === tail.toUpperCase() && /\p{L}/u.test(tail) ? tail : null
+}
+
 export function parsePage(pageHtml: string): PageRoute[] {
   const ld = [...pageHtml.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)]
     .map((m) => JSON.parse(m[1]))
@@ -80,9 +87,13 @@ export function parsePage(pageHtml: string): PageRoute[] {
   }))
 
   const details = new Map<string, ReturnType<typeof parseDetail>>()
+  const notices = new Map<string, string | null>()
   for (const e of entries) {
     const code = codeOf(e.name)
-    if (code) details.set(code.id, parseDetail(e.html))
+    if (code) {
+      details.set(code.id, parseDetail(e.html))
+      notices.set(code.id, headingNotice(e.name))
+    }
   }
 
   const routes: PageRoute[] = []
@@ -106,6 +117,7 @@ export function parsePage(pageHtml: string): PageRoute[] {
         elevationGainM: num(desnivel),
         type: tipo || null,
         sector: sector || null,
+        notice: notices.get(code.id) ?? null,
         warnings: precauciones === 'No' ? null : precauciones,
         description: section('DESCRIPCIÓN'),
         gpxUrl: abs(d?.TRACKS?.href),
@@ -149,15 +161,44 @@ export function rdp(line: Position[], tolerance: number): Position[] {
   return line.filter((_, i) => keep[i])
 }
 
+const DUP_METERS = 5
+
+/** Distance in meters from p to segment a-b, on a local equirectangular plane (fine at ~5 m scale). */
+function distToSegmentMeters(p: Position, a: Position, b: Position): number {
+  const kx = 111320 * Math.cos((p[1] * Math.PI) / 180)
+  const ky = 110540
+  const ax = (a[0] - p[0]) * kx, ay = (a[1] - p[1]) * ky
+  const dx = (b[0] - a[0]) * kx, dy = (b[1] - a[1]) * ky
+  const len2 = dx * dx + dy * dy
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2))
+  return Math.hypot(ax + t * dx, ay + t * dy)
+}
+
+const within = (p: Position, line: Position[]) => {
+  for (let i = 1; i < line.length; i++) if (distToSegmentMeters(p, line[i - 1], line[i]) <= DUP_METERS) return true
+  return false
+}
+
+/** Drops lines whose every point lies within 5 m of a longer line kept before it (official GPX files repeat segments). */
+export function dropContainedLines(all: Position[][]): Position[][] {
+  const kept: Position[][] = []
+  for (const l of [...all].sort((a, b) => b.length - a.length)) {
+    if (!kept.some((k) => l.every((p) => within(p, k)))) kept.push(l)
+  }
+  return all.filter((l) => kept.includes(l))
+}
+
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6
 
 export function gpxToGeometry(xml: string): { geometry: GeoJSON.MultiLineString; computedLengthKm: number } {
   const doc = new DOMParser().parseFromString(xml, 'text/xml')
   const fc = gpx(doc as unknown as Document)
-  const raw = fc.features
-    .flatMap((f) => (f.geometry ? lines(f.geometry) : []))
-    .map((l) => dedupe(l.map((p) => [p[0], p[1]])))
-    .filter((l) => l.length >= 2)
+  const raw = dropContainedLines(
+    fc.features
+      .flatMap((f) => (f.geometry ? lines(f.geometry) : []))
+      .map((l) => dedupe(l.map((p) => [p[0], p[1]])))
+      .filter((l) => l.length >= 2),
+  )
   if (!raw.length) throw new Error('GPX has no track')
   const computedLengthKm = Math.round(lengthMeters({ type: 'MultiLineString', coordinates: raw }) / 10) / 100
   const coordinates = raw

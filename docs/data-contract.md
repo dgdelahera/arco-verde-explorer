@@ -14,11 +14,12 @@ type RouteProps = {
   elevationGainM: number | null; // official "Desnivel (m)"
   type: string | null;      // official "Tipo": "Lineal" | "Circular" | "Ida y vuelta"
   sector: string | null;    // official "Sector" verbatim: "4", "6 y 7", "Todos"
+  notice: string | null;    // official warning appended to the route heading after its name, verbatim (e.g. "TEMPORALMENTE NO SEÑALIZADA."); null when none
   warnings: string | null;  // official PRECAUCIONES, null when "No"
   description: string | null; // official DESCRIPCIÓN, verbatim, paragraphs joined by "\n\n"
   gpxUrl: string;           // official, unmodified GPX on comunidad.madrid
   planUrl: string | null;   // official PDF map
-  computedLengthKm: number; // DERIVED: length of the original (unsimplified) track
+  computedLengthKm: number; // DERIVED: length of the original (unsimplified) track, after dropping segments that repeat another segment of the same route (within 5 m)
 };
 
 type RoutesFile = GeoJSON.FeatureCollection<GeoJSON.MultiLineString, RouteProps> & {

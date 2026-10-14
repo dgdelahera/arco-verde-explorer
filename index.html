@@ -3,11 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Arco Verde Explorer</title>
+    <title>Arco Verde Explorer · Mapa de las rutas del Arco Verde de Madrid</title>
+    <meta name="description" content="Explora en un mapa las 36 rutas oficiales del Arco Verde de Madrid: filtra por municipio, distancia o desnivel y descarga el GPX. Datos abiertos de la Comunidad de Madrid." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://arco-verde.dgdelahera.com/" />
+    <meta property="og:title" content="Arco Verde Explorer · Mapa de las rutas del Arco Verde de Madrid" />
+    <meta property="og:description" content="Explora en un mapa las 36 rutas oficiales del Arco Verde de Madrid: filtra por municipio, distancia o desnivel y descarga el GPX. Datos abiertos de la Comunidad de Madrid." />
+    <meta property="og:image" content="https://arco-verde.dgdelahera.com/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Mapa con el anillo de las 36 rutas del Arco Verde alrededor de Madrid" />
+    <meta property="og:locale" content="es_ES" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preload" href="/data/routes.geojson" as="fetch" type="application/geo+json" crossorigin="anonymous" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <p style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;color:#2f6b3a">Cargando mapa…</p>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { emptyFilters, filterRoutes, parseRoutes } from './filters'
+import { emptyFilters, filterRoutes, lengthMismatch, parseRoutes, routeIdFromHash } from './filters'
 import { fixture } from './test/fixture'
 
 const { routes } = parseRoutes(fixture)
@@ -33,5 +33,35 @@ describe('filterRoutes', () => {
     expect(ids({ maxKm: '10,5' })).toEqual(['RC1'])
     expect(ids({ maxKm: 'abc' })).toHaveLength(ids({}).length)
     expect(ids({ maxGain: '100' })).toEqual(['RC1'])
+  })
+})
+
+describe('search normalisation', () => {
+  it('ignores spaces and hyphens in query and haystack', () => {
+    expect(ids({ q: 'las-rozas' })).toEqual(['RC1'])
+    expect(ids({ q: 'camino  de alcobendas' })).toEqual(['RL2'])
+    expect(ids({ q: 'rl 2' })).toEqual(['RL2'])
+    expect(ids({ q: 'senda-del arroyo' })).toEqual(['RC1'])
+  })
+})
+
+describe('routeIdFromHash', () => {
+  const all = ['RC1', 'RL20', 'RL4b']
+  it('matches case-insensitively and ignores unknown ids', () => {
+    expect(routeIdFromHash('#rl20', all)).toBe('RL20')
+    expect(routeIdFromHash('#RL4B', all)).toBe('RL4b')
+    expect(routeIdFromHash('#nope', all)).toBeNull()
+    expect(routeIdFromHash('', all)).toBeNull()
+    expect(routeIdFromHash('#%E0%A4%A', all)).toBeNull()
+  })
+})
+
+describe('lengthMismatch', () => {
+  const p = routes[0].properties
+  it('flags differences over 10% of the official distance', () => {
+    expect(lengthMismatch({ ...p, distanceKm: 10, computedLengthKm: 11.1 })).toBe(true)
+    expect(lengthMismatch({ ...p, distanceKm: 10, computedLengthKm: 8.9 })).toBe(true)
+    expect(lengthMismatch({ ...p, distanceKm: 10, computedLengthKm: 10.9 })).toBe(false)
+    expect(lengthMismatch({ ...p, distanceKm: null, computedLengthKm: 5 })).toBe(false)
   })
 })
