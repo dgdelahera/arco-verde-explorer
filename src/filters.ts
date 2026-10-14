@@ -14,6 +14,7 @@ export type RouteProps = {
   gpxUrl: string
   planUrl: string | null
   computedLengthKm: number
+  notice?: string | null
 }
 export type RouteFeature = GeoJSON.Feature<GeoJSON.MultiLineString | GeoJSON.LineString, RouteProps>
 export type Metadata = { source: string; sourceUrl: string; extractedAt: string }
@@ -50,7 +51,7 @@ export function parseRoutes(json: unknown): RoutesData {
   return { routes, metadata: fc.metadata ?? null }
 }
 
-const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
+const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[\s-]/g, '')
 const num = (s: string) => {
   const n = Number(s.trim().replace(',', '.'))
   return s.trim() === '' || !Number.isFinite(n) ? null : n
@@ -76,3 +77,13 @@ export function filterRoutes(routes: RouteFeature[], f: Filters): RouteFeature[]
 
 export const distinct = <T,>(values: (T | null)[]): T[] =>
   [...new Set(values.filter((v): v is T => v !== null))].sort((a, b) => String(a).localeCompare(String(b), 'es'))
+
+export const routeIdFromHash = (hash: string, ids: string[]): string | null => {
+  let wanted = hash.replace(/^#/, '')
+  try { wanted = decodeURIComponent(wanted) } catch { /* keep raw */ }
+  wanted = wanted.toLowerCase()
+  return ids.find((id) => id.toLowerCase() === wanted) ?? null
+}
+
+export const lengthMismatch = (p: RouteProps) =>
+  p.distanceKm !== null && p.distanceKm > 0 && Math.abs(p.computedLengthKm - p.distanceKm) / p.distanceKm > 0.1
