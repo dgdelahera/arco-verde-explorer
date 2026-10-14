@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { distinct, emptyFilters, lengthMismatch, type Filters, type RouteFeature, type RoutesData } from './filters'
-import { startDirectionsUrl } from './geo'
+import { directionsUrls, toGpx } from './geo'
 
 export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
 const LOCATE_MESSAGES: Partial<Record<LocateStatus, string>> = {
@@ -18,6 +18,8 @@ const longDate = (iso: string) => {
 
 const km = (n: number) => `${n.toLocaleString('es-ES', { maximumFractionDigits: 1 })} km`
 const orNA = (v: string | number | null) => (v === null || v === '' ? 'No publicado' : v)
+const summary = (p: RouteFeature['properties']) =>
+  [CATEGORY[p.category], p.type, p.elevationGainM !== null && `desnivel ${p.elevationGainM} m`].filter(Boolean).join(' · ')
 
 type Props = {
   data: RoutesData
@@ -40,6 +42,9 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
   const types = distinct(props.map((p) => p.type))
   const hasGain = props.some((p) => p.elevationGainM !== null)
   const set = (k: keyof Filters) => (e: { target: { value: string } }) => onFiltersChange({ ...filters, [k]: e.target.value })
+  const active = Object.entries(filters).filter(([k, v]) => k !== 'type' && v).length
+  const [filtersOpen] = useState(() => !window.matchMedia?.('(max-width: 767px)').matches)
+  const routesHeading = useRef<HTMLHeadingElement>(null)
 
   const [prevSelected, setPrevSelected] = useState(selectedId)
   if (prevSelected !== selectedId) {
@@ -56,12 +61,11 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
     <main className="panel" data-open={open} data-full={full}>
       <header className="panel-header">
         <h1>Arco Verde Explorer</h1>
-        <button type="button" onClick={onShowAll}>Ver todas</button>
-        <button type="button" className="sheet-toggle" aria-expanded={open} aria-controls="panel-body" onClick={() => setOpen(!open)}>
-          {open ? 'Ocultar panel' : 'Mostrar panel'}
+        <button type="button" className="sheet-toggle" aria-label={open ? 'Ocultar panel' : 'Mostrar panel'} aria-expanded={open} aria-controls="panel-body" onClick={() => setOpen(!open)}>
+          {open ? 'Ocultar' : 'Mostrar'}
         </button>
-        <button type="button" className="sheet-toggle" aria-pressed={full} onClick={() => { setFull(!full); setOpen(true) }}>
-          Ampliar panel
+        <button type="button" className="sheet-toggle" aria-label="Ampliar panel" aria-pressed={full} onClick={() => { setFull(!full); setOpen(true) }}>
+          Ampliar
         </button>
       </header>
 
@@ -72,51 +76,58 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
             <a href={data.metadata.sourceUrl} target="_blank" rel="noopener noreferrer">Fuente oficial</a>
           </p>
         )}
-        <h2 className="section-title">Filtros</h2>
-        <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
-          <label className="wide">Buscar por nombre o municipio
-            <input type="search" name="q" value={filters.q} onChange={set('q')} />
-          </label>
-          <label>Municipio
-            <select name="municipality" value={filters.municipality} onChange={set('municipality')}>
-              <option value="">Todos</option>
-              {municipalities.map((m) => <option key={m}>{m}</option>)}
-            </select>
-          </label>
-          <label>Categoría
-            <select name="category" value={filters.category} onChange={set('category')}>
-              <option value="">Todas</option>
-              <option value="corta">Corta</option>
-              <option value="larga">Larga</option>
-            </select>
-          </label>
-          {types.length > 0 && (
-            <label>Tipo
-              <select name="type" value={filters.type} onChange={set('type')}>
+        <details className="filters-box" open={filtersOpen}>
+          <summary className="section-title">Filtros{active > 0 && ` (${active})`}</summary>
+          <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
+            <label className="wide">Buscar por nombre o municipio
+              <input type="search" name="q" value={filters.q} onChange={set('q')} />
+            </label>
+            <label>Municipio
+              <select name="municipality" value={filters.municipality} onChange={set('municipality')}>
                 <option value="">Todos</option>
-                {types.map((t) => <option key={t}>{t}</option>)}
+                {municipalities.map((m) => <option key={m}>{m}</option>)}
               </select>
             </label>
-          )}
-          <label>Distancia mín. (km)
-            <input type="number" min="0" step="0.5" inputMode="decimal" name="minKm" value={filters.minKm} onChange={set('minKm')} />
-          </label>
-          <label>Distancia máx. (km)
-            <input type="number" min="0" step="0.5" inputMode="decimal" name="maxKm" value={filters.maxKm} onChange={set('maxKm')} />
-          </label>
-          {hasGain && (
-            <label>Desnivel máx. (m)
-              <input type="number" min="0" step="50" inputMode="numeric" name="maxGain" value={filters.maxGain} onChange={set('maxGain')} />
+            <label>Categoría
+              <select name="category" value={filters.category} onChange={set('category')}>
+                <option value="">Todas</option>
+                <option value="corta">Corta</option>
+                <option value="larga">Larga</option>
+              </select>
             </label>
-          )}
-        </form>
+            <label>Distancia mín. (km)
+              <input type="number" min="0" step="0.5" inputMode="decimal" name="minKm" value={filters.minKm} onChange={set('minKm')} />
+            </label>
+            <label>Distancia máx. (km)
+              <input type="number" min="0" step="0.5" inputMode="decimal" name="maxKm" value={filters.maxKm} onChange={set('maxKm')} />
+            </label>
+            {hasGain && (
+              <label>Desnivel máx. (m)
+                <input type="number" min="0" step="50" inputMode="numeric" name="maxGain" value={filters.maxGain} onChange={set('maxGain')} />
+              </label>
+            )}
+          </form>
+        </details>
+
+        {types.length > 0 && (
+          <fieldset className="type-chips">
+            <legend>Tipo de ruta</legend>
+            {['', ...types].map((t) => (
+              <label key={t || 'all'}>
+                <input type="radio" name="type" value={t} checked={filters.type === t} onChange={set('type')} />
+                {t || 'Todas'}
+              </label>
+            ))}
+          </fieldset>
+        )}
 
         <div className="nearby">
-          <button type="button" onClick={onLocate} disabled={locateStatus === 'loading'}>Cerca de mí</button>
+          <button type="button" onClick={() => locateStatus !== 'loading' && onLocate()} aria-disabled={locateStatus === 'loading'}>Cerca de mí</button>
+          <button type="button" onClick={onShowAll}>Ver todas</button>
           <p role="status" className="locate-msg" data-error={locateStatus !== 'idle' && locateStatus !== 'loading' && locateStatus !== 'done'}>{LOCATE_MESSAGES[locateStatus]}</p>
         </div>
 
-        <h2 className="section-title">Rutas</h2>
+        <h2 className="section-title" id="routes-heading" tabIndex={-1} ref={routesHeading}>Rutas</h2>
         <p className="count">
           <span aria-live="polite" aria-atomic="true">{visible.length} de {data.routes.length} rutas</span>
           <span className="legend"><i className="swatch corta" /> Corta <i className="swatch larga" /> Larga</span>
@@ -125,7 +136,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
         {visible.length === 0 && (
           <div className="empty">
             <p>Ninguna ruta coincide con los filtros</p>
-            <button type="button" onClick={() => onFiltersChange(emptyFilters)}>Limpiar filtros</button>
+            <button type="button" onClick={() => { onFiltersChange(emptyFilters); routesHeading.current?.focus() }}>Limpiar filtros</button>
           </div>
         )}
 
@@ -135,7 +146,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
               <button type="button" className={`route-item ${p.category}`} aria-expanded={p.id === selectedId} onClick={() => onSelect(p.id === selectedId ? null : p.id)}>
                 <span className="route-id">{p.id}</span>
                 <span className="route-name">{p.name}
-                  <small className="route-meta">{CATEGORY[p.category]}{distances?.has(p.id) && ` · a ${km(distances.get(p.id)!)}`}</small>
+                  <small className="route-meta">{summary(p)}{distances?.has(p.id) && ` · a ${km(distances.get(p.id)!)}`}</small>
                 </span>
                 <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
               </button>
@@ -162,7 +173,15 @@ function Details({ route }: { route: RouteFeature }) {
   const p = route.properties
   const [more, setMore] = useState(false)
   const [shareMsg, setShareMsg] = useState('')
-  const directions = startDirectionsUrl(route.geometry)
+  const directions = directionsUrls(route.geometry, p.type)
+  const downloadGpx = () => {
+    const url = URL.createObjectURL(new Blob([toGpx(`${p.id} ${p.name}`, route.geometry)], { type: 'application/gpx+xml' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `arco-verde-${p.id}.gpx`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  }
   const long = (p.description?.length ?? 0) > 280
   useEffect(() => {
     if (!shareMsg) return
@@ -186,13 +205,13 @@ function Details({ route }: { route: RouteFeature }) {
     <article className="details" aria-label={`Detalles de ${p.name}`}>
       <h3>{p.name} <span className="route-id">{p.id}</span></h3>
       <div className="actions">
-        <a className="btn primary" href={p.gpxUrl} target="_blank" rel="noopener noreferrer">Descargar GPX (original)</a>
+        <button type="button" className="btn primary" onClick={downloadGpx}>Descargar GPX</button>
+        {directions && <a className="btn" href={directions.toStart} target="_blank" rel="noopener noreferrer">Cómo llegar al inicio</a>}
+        {directions?.fromEnd && <a className="btn" href={directions.fromEnd} target="_blank" rel="noopener noreferrer">Volver desde el final</a>}
         {p.planUrl && <a className="btn" href={p.planUrl} target="_blank" rel="noopener noreferrer">Plano (PDF)</a>}
-        {directions && <a className="btn" href={directions} target="_blank" rel="noopener noreferrer">Cómo llegar al inicio</a>}
         <button type="button" onClick={share}>Compartir</button>
         <span role="status" className="note">{shareMsg}</span>
       </div>
-      <p className="note">Puedes importarlo en Strava (web: Mis rutas → Crear ruta → subir archivo) o abrirlo con Wikiloc, OsmAnd u otra app de rutas.</p>
       {p.notice && <p className="warnings" role="note"><strong>Aviso oficial:</strong> {p.notice}</p>}
       {p.warnings && <p className="warnings" role="note"><strong>Precauciones:</strong> {p.warnings}</p>}
       <dl>
@@ -208,6 +227,10 @@ function Details({ route }: { route: RouteFeature }) {
         <dt>Sector</dt><dd>{orNA(p.sector)}</dd>
         <dt>Municipios</dt><dd>{orNA(p.municipalities.join(', '))}</dd>
       </dl>
+      <p className="note">
+        Puedes importarlo en Strava (web: Mis rutas → Crear ruta → subir archivo) o abrirlo con Wikiloc, OsmAnd u otra app de rutas.
+        Es el track oficial sin puntos duplicados y simplificado con un margen de unos 5 m; también está el <a href={p.gpxUrl} target="_blank" rel="noopener noreferrer">GPX original</a>.
+      </p>
       <div id={`desc-${p.id}`} className="desc" data-collapsed={long && !more}>
         {p.description?.split(/\n\s*\n/).map((para, i) => <p key={i}>{para}</p>)}
       </div>

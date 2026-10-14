@@ -87,6 +87,14 @@ button:hover { background: #e8e8e8; }
 .chooser-item { display: block; width: 100%; text-align: left; margin-bottom: 0.25rem; }
 .leaflet-container:focus-visible { outline-offset: -3px; }
 .note { font-size: 0.85rem; color: var(--muted); font-style: italic; }
+.filters-box summary { cursor: pointer; font-weight: 600; }
+button[aria-disabled='true'] { opacity: 0.6; cursor: progress; }
+.filters-box[open] summary { margin-bottom: 0.5rem; }
+.type-chips { border: 0; margin: 0.5rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.type-chips legend, .type-chips input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.type-chips label { display: inline-flex; align-items: center; padding: 0.3rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: #fff; cursor: pointer; font-size: 0.9rem; }
+.type-chips label:has(:checked) { background: #e9f3ec; border-color: var(--accent); font-weight: 600; }
+.type-chips label:has(:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 .attribution { margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
 .attribution p { margin: 0.25rem 0; }
@@ -103,4 +111,14 @@ button:hover { background: #e8e8e8; }
   .panel[data-open='false'] { height: auto; }
   .panel[data-open='false'] .panel-body { display: none; }
   .sheet-toggle { display: inline-block; }
+  h1 { font-size: 1rem; }
+  .intro { display: none; }
+}
+
+@media (pointer: coarse) {
+  button, .btn, .filters input, .filters select { min-height: 44px; }
+  .btn { display: inline-flex; align-items: center; }
+  .filters-box summary { padding: 0.6rem 0; }
+  .type-chips label { min-height: 44px; }
+  .leaflet-touch .leaflet-bar a { width: 44px; height: 44px; line-height: 44px; }
 }
