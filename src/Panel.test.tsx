@@ -8,10 +8,12 @@ import { Panel, type LocateStatus, type Planner, type PoiPanel } from './Panel'
 import type { PoiFeature } from './pois'
 import { fixture } from './test/fixture'
 import { parseElevation, type ElevationData } from './elevation'
+import { buildNetwork } from './network'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear() })
 
 const data = parseRoutes(fixture)
+const network = buildNetwork(data.routes.map((r) => r.geometry))
 const long = 'Texto largo. '.repeat(40)
 const withProps = (id: string, extra: object) => ({
   ...data,
@@ -27,7 +29,7 @@ function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances 
   const [filters, setFilters] = useState(emptyFilters)
   return (
     <Panel data={d} visible={filterRoutes(d.routes, filters)} filters={filters} onFiltersChange={setFilters}
-      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} pois={pois} elevation={elevation} />
+      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} network={network} pois={pois} elevation={elevation} />
   )
 }
 
@@ -150,7 +152,7 @@ it('moves focus to the route list after clearing filters', () => {
 
 it('keeps Cerca de mí focusable while locating and ignores clicks', () => {
   const onLocate = vi.fn()
-  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} planner={null} onPlan={() => {}} pois={noPois} />)
+  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} planner={null} onPlan={() => {}} network={network} pois={noPois} />)
   const btn = screen.getByRole('button', { name: 'Cerca de mí' })
   expect(btn).not.toBeDisabled()
   expect(btn).toHaveAttribute('aria-disabled', 'true')
@@ -252,17 +254,27 @@ it('offers the planner and seeds it from the selected route start', () => {
 })
 
 it('shows planner metrics, labels and controls', async () => {
-  const planner = { points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
+  const points = [[-3.7038, 40.4168], [-3.6921, 40.4193]]
+  const planner = { points, path: [points[0], [-3.7038, 40.4258], points[1]], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
   const writeText = vi.fn().mockResolvedValue(undefined)
   Object.assign(navigator, { clipboard: { writeText }, share: undefined })
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
   render(<Harness selectedId={null} planner={planner} />)
   const section = within(screen.getByRole('region', { name: 'Crear ruta' }))
-  expect(section.getByText(/Distancia: 1 km/).closest('p')).toHaveTextContent('Distancia: 1 km · 2 puntos')
+  expect(section.getByText(/Distancia: 2,2 km/).closest('p')).toHaveTextContent('Distancia: 2,2 km · 2 puntos')
   expect(section.getByText(/Desnivel estimado/)).toHaveTextContent('Desnivel estimado: calculando…')
   expect(await section.findByText(/no se pudo consultar el modelo del terreno/, undefined, { timeout: 2000 })).toHaveTextContent('Desnivel estimado: no disponible')
-  expect(section.getByText(/Duración estimada: 15 min/)).toHaveTextContent('a 4 km/h')
-  expect(section.getByRole('note')).toHaveTextContent('Trazado manual — no es una ruta validada. Los puntos se ajustan a los caminos oficiales, pero entre un punto y otro se traza una línea recta')
+  expect(section.getByText(/Duración estimada: 35 min/)).toHaveTextContent('a 4 km/h')
+  expect(section.getByRole('note')).toHaveTextContent('Trazado manual — no es una ruta validada. Sigue los tracks oficiales de Arco Verde, que pueden incluir tramos por carretera o variantes')
+  expect(section.getByRole('note')).not.toHaveTextContent(/línea recta/)
+  expect(section.getByText(/se une al anterior siguiendo los caminos oficiales/)).toBeInTheDocument()
+  let blob: Blob | undefined
+  Object.assign(URL, { createObjectURL: (b: Blob) => { blob = b; return 'blob:gpx' }, revokeObjectURL: () => {} })
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  fireEvent.click(section.getByRole('button', { name: 'Descargar GPX' }))
+  const gpx = await blob!.text()
+  expect(gpx.match(/<trkpt /g)).toHaveLength(3)
+  expect(gpx).toContain('<trkpt lat="40.4258" lon="-3.7038"/>')
   expect(section.getByRole('button', { name: 'Deshacer' })).toBeDisabled()
   fireEvent.click(section.getByRole('button', { name: 'Borrar' }))
   fireEvent.click(section.getByRole('button', { name: 'Salir' }))
@@ -274,7 +286,7 @@ it('shows planner metrics, labels and controls', async () => {
 })
 
 it('adds a planner point at the map centre from the keyboard', () => {
-  const planner = { points: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
+  const planner = { points: [], path: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
   const { rerender } = render(<Harness selectedId={null} planner={planner} />)
   expect(screen.queryByText(/Desnivel estimado/)).not.toBeInTheDocument()
   const add = screen.getByRole('button', { name: 'Añadir punto en el centro del mapa' })
@@ -326,7 +338,7 @@ it('shows the computed profile and gain apart from the official desnivel, with s
   expect(screen.getByText(/no se muestra perfil de elevación/)).toBeInTheDocument()
 })
 
-const planner = (extra: Partial<Planner> = {}): Planner => ({ points: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn(), ...extra })
+const planner = (extra: Partial<Planner> = {}): Planner => ({ points: [], path: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn(), ...extra })
 
 it('labels the official figure as an altitude difference in the filter', () => {
   render(<Harness />)
@@ -377,10 +389,10 @@ it('collapses the expanded sheet before adding the centre point', () => {
 
 it('announces the plan in one debounced status and covers keyboard users in the instructions', () => {
   vi.useFakeTimers()
-  const p = planner({ points: [[-3.7038, 40.4168]] })
+  const p = planner({ points: [[-3.7038, 40.4168]], path: [[-3.7038, 40.4168]] })
   const { rerender } = render(<Harness selectedId={null} planner={p} />)
   const region = screen.getAllByRole('status').find((el) => el.classList.contains('visually-hidden'))!
-  rerender(<Harness selectedId={null} planner={{ ...p, points: [[-3.7038, 40.4168], [-3.6921, 40.4193]] }} />)
+  rerender(<Harness selectedId={null} planner={{ ...p, points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], path: [[-3.7038, 40.4168], [-3.6921, 40.4193]] }} />)
   act(() => { vi.advanceTimersByTime(900) })
   expect(region).toBeEmptyDOMElement()
   act(() => { vi.advanceTimersByTime(100) })
@@ -393,7 +405,7 @@ it('announces the plan in one debounced status and covers keyboard users in the 
 it('retries the planner elevation when the browser comes back online', async () => {
   const fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
   vi.stubGlobal('fetch', fetch)
-  render(<Harness selectedId={null} planner={planner({ points: [[-3.7038, 40.4168], [-3.6921, 40.4193]] })} />)
+  render(<Harness selectedId={null} planner={planner({ points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], path: [[-3.7038, 40.4168], [-3.6921, 40.4193]] })} />)
   await screen.findByText(/no se pudo consultar el modelo del terreno/, undefined, { timeout: 2000 })
   const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
   act(() => { dispatchEvent(new Event('offline')) })
