@@ -6,7 +6,8 @@ import { emptyFilters, filterRoutes, norm, parseRoutes, routeIdFromHash, type Ro
 import { distanceToGeometryMeters, endMarkers, fitPadding, lines, minDistanceToLines, snapToNetwork, type Position } from './geo'
 import { useOnline } from './online'
 import { Panel, type LocateStatus } from './Panel'
-import { decodePlan, onNetwork, openableDraft, MAX_POINTS, planHash, round5, saveDraft } from './plan'
+import { decodePlan, openableDraft, MAX_POINTS, planHash, round5, saveDraft } from './plan'
+import { buildNetwork } from './network'
 import { osmUrl, parsePois, POI_CATEGORIES, searchPois, type PoiCategory, type PoiFeature, type PoisData } from './pois'
 import { parseElevation, type ElevationData } from './elevation'
 
@@ -212,12 +213,13 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
   return null
 }
 
-type Edit = (f: (points: Position[]) => Position[]) => void
+type Edit = (f: (points: Position[]) => Position[]) => boolean
 type Snap = (ll: { lat: number; lng: number }) => Position | null
 const focus = (el: HTMLElement | null) => el?.focus()
+const append = (at: Position) => (p: Position[]) => (`${p.at(-1)}` === `${at}` ? p : [...p, at])
 const pin = (n: number) => divIcon({ className: 'plan-pin', html: `<span aria-hidden="true">${n}</span>`, iconSize: [32, 32] })
 
-function PlanLayer({ points, edit, snap }: { points: Position[]; edit: Edit; snap: Snap }) {
+function PlanLayer({ points, path, edit, snap }: { points: Position[]; path: Position[]; edit: Edit; snap: Snap }) {
   const map = useMap()
   const dragEnd = useRef(0)
   useEffect(() => {
@@ -225,7 +227,7 @@ function PlanLayer({ points, edit, snap }: { points: Position[]; edit: Edit; sna
     const onClick = (e: L.LeafletMouseEvent) => {
       if (Date.now() - dragEnd.current < 300) return
       const at = snap(e.latlng)
-      if (at) edit((p) => [...p, at])
+      if (at) edit(append(at))
     }
     map.on('click', onClick)
     map.doubleClickZoom.disable()
@@ -234,14 +236,14 @@ function PlanLayer({ points, edit, snap }: { points: Position[]; edit: Edit; sna
   }, [map, edit, snap])
   return (
     <Pane name="plan" style={{ zIndex: 440 }}>
-      <Polyline positions={points.map(([lon, lat]): LatLngTuple => [lat, lon])} pathOptions={{ color: PLAN, weight: 4, dashArray: '8 6', interactive: false }} />
+      <Polyline positions={path.map(([lon, lat]): LatLngTuple => [lat, lon])} pathOptions={{ color: PLAN, weight: 4, dashArray: '8 6', interactive: false }} />
       {points.map(([lon, lat], i) => (
         <Marker key={i} position={[lat, lon]} icon={pin(i + 1)} draggable title={`Punto ${i + 1}: púlsalo (o Intro) para eliminarlo; arrástralo para moverlo`} eventHandlers={{
           dragend: (e) => {
             dragEnd.current = Date.now()
             const at = snap(e.target.getLatLng())
-            e.target.setLatLng(at ? [at[1], at[0]] : [lat, lon])
-            if (at) edit((p) => p.map((q, j) => (j === i ? at : q)))
+            const moved = !!at && edit((p) => p.map((q, j) => (j === i ? at : q)))
+            e.target.setLatLng(moved ? [at[1], at[0]] : [lat, lon])
           },
         }}>
           <Popup>
@@ -321,6 +323,7 @@ export default function App() {
   }, [])
 
   const tracks = useMemo(() => data?.routes.map((r) => r.geometry) ?? [], [data])
+  const graph = useMemo(() => buildNetwork(tracks), [tracks])
   const [planMsg, setPlanMsg] = useState('')
   const [notice, setNotice] = useState('')
   const snap = useCallback<Snap>((ll) => {
@@ -331,19 +334,29 @@ export default function App() {
 
   // Plans opened from a link live in the URL; only plans the user started go to the saved draft.
   const startPlan = useCallback((seed?: Position[], link = false) => {
-    const draft = link ? [] : openableDraft(tracks)
-    if (!draft && !window.confirm('Tu borrador guardado tiene puntos fuera de los caminos de Arco Verde y no se puede abrir. ¿Descartarlo y empezar uno nuevo?')) return
+    const draft = link ? [] : openableDraft(graph)
+    if (!draft && !window.confirm('Tu borrador guardado tiene puntos fuera de los caminos de Arco Verde o sin conexión entre ellos y no se puede abrir. ¿Descartarlo y empezar uno nuevo?')) return
     const points = seed ?? draft ?? []
     setPlanMsg('')
     setNotice('')
     setPlan({ points, past: seed && draft?.length ? [draft] : [], link })
     setPlanView(points.length ? latLng(points[0][1], points[0][0]).toBounds(2000).extend(latLngBounds(points.map(([lon, lat]) => [lat, lon])).pad(0.25)) : null)
-  }, [tracks])
-  const editPlan = useCallback<Edit>((f) => setPlan((p) => {
-    if (!p) return p
-    const points = f(p.points)
-    return points.length > MAX_POINTS ? p : { ...p, points, past: [...p.past, p.points], edited: true }
-  }), [])
+  }, [graph])
+  const planRef = useRef(plan)
+  useEffect(() => { planRef.current = plan }, [plan])
+  const editPlan = useCallback<Edit>((f) => {
+    const p = planRef.current
+    const points = p && f(p.points)
+    if (!p || !points || points === p.points || points.length > MAX_POINTS) return false
+    if (!graph.route(points)) {
+      setPlanMsg('No hay conexión por los caminos de Arco Verde entre estos puntos')
+      return false
+    }
+    setPlanMsg('')
+    setPlan((planRef.current = { ...p, points, past: [...p.past, p.points], edited: true }))
+    return true
+  }, [graph])
+  const path = useMemo(() => (plan && graph.route(plan.points)) ?? [], [plan, graph])
   useEffect(() => {
     if (!plan?.edited) return
     if (plan.link) history.replaceState(null, '', planHash(plan.points))
@@ -355,11 +368,11 @@ export default function App() {
     const ids = data.routes.map((r) => r.properties.id)
     const onHash = () => {
       const points = decodePlan(location.hash)
-      if (points && onNetwork(points, tracks)) return startPlan(points, true)
+      if (points && graph.route(points)) return startPlan(points, true)
       setPlan(null)
       setPlanView(null)
       if (points) {
-        setNotice('El trazado del enlace tiene puntos fuera de los caminos de Arco Verde y no se puede abrir')
+        setNotice('El trazado del enlace tiene puntos fuera de los caminos de Arco Verde o sin conexión entre ellos y no se puede abrir')
         history.replaceState(null, '', location.pathname + location.search)
       }
       setSelectedId(routeIdFromHash(location.hash, ids))
@@ -367,7 +380,7 @@ export default function App() {
     onHash()
     addEventListener('hashchange', onHash)
     return () => removeEventListener('hashchange', onHash)
-  }, [data, tracks, startPlan])
+  }, [data, graph, startPlan])
 
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
@@ -452,8 +465,9 @@ export default function App() {
         onLocate={locate}
         planner={plan && {
           points: plan.points,
+          path,
           canUndo: plan.past.length > 0,
-          undo: () => setPlan({ ...plan, points: plan.past.at(-1)!, past: plan.past.slice(0, -1), edited: true }),
+          undo: () => { setPlanMsg(''); setPlan({ ...plan, points: plan.past.at(-1)!, past: plan.past.slice(0, -1), edited: true }) },
           clear: () => editPlan(() => []),
           addCenter: () => {
             const map = mapRef.current!
@@ -461,7 +475,7 @@ export default function App() {
             const x = document.querySelector('.crosshair')!.getBoundingClientRect()
             const ll = map.containerPointToLatLng([x.left + x.width / 2 - box.left, x.top + x.height / 2 - box.top])
             const at = snap(ll)
-            if (at) editPlan((p) => [...p, at])
+            if (at) editPlan(append(at))
           },
           message: planMsg,
           exit: () => {
@@ -471,6 +485,7 @@ export default function App() {
           },
         }}
         onPlan={startPlan}
+        network={graph}
         notice={notice}
         pois={{ active: poiCats, toggle: togglePoi, status: typeof pois === 'object' ? 'ready' : pois, metadata: poiData?.metadata ?? null, matches: poiMatches, focus: focusPoi }}
         elevation={elevation}
@@ -492,7 +507,7 @@ export default function App() {
             </Pane>
           )}
           {!plan && <PoiLayer pois={shownPois} focus={poiFocus} onFocused={clearPoiFocus} />}
-          {plan ? <PlanLayer points={plan.points} edit={editPlan} snap={snap} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
+          {plan ? <PlanLayer points={plan.points} path={path} edit={editPlan} snap={snap} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
           <FitBounds bounds={bounds} nonce={fitNonce} />
         </MapContainer>
         {plan && <div className="crosshair" aria-hidden="true" />}
