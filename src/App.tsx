@@ -4,6 +4,7 @@ import { Control, divIcon, DomEvent, latLng, latLngBounds, popup, tooltip, type 
 import { AttributionControl, CircleMarker, MapContainer, Marker, Pane, Popup, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
 import { emptyFilters, filterRoutes, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
 import { distanceToGeometryMeters, lines, minDistanceToLines, routeEnds, type Position } from './geo'
+import { useOnline } from './online'
 import { Panel, type LocateStatus } from './Panel'
 import { decodePlan, loadDraft, MAX_POINTS, round5, saveDraft } from './plan'
 
@@ -216,6 +217,7 @@ export default function App() {
   const [plan, setPlan] = useState<{ points: Position[]; past: Position[][]; edited?: boolean } | null>(null)
   const [planView, setPlanView] = useState<LatLngBounds | null>(null)
   const mapRef = useRef<LeafletMap>(null)
+  const online = useOnline()
 
   useEffect(() => {
     fetch('/data/routes.geojson')
@@ -307,7 +309,7 @@ export default function App() {
     )
   }
 
-  if (error) return <p className="status" role="alert">No se pudieron cargar las rutas ({error}). Recarga la página o inténtalo más tarde.</p>
+  if (error) return <p className="status" role="alert">No se pudieron cargar las rutas ({error}). {online ? 'Recarga la página o inténtalo más tarde.' : 'No hay conexión y este dispositivo aún no tiene las rutas guardadas: conéctate a internet y recarga la página.'}</p>
   if (!data) return <p className="status" role="status">Cargando rutas…</p>
 
   const showAll = () => { setFilters(emptyFilters); select(null); setNearMe(false); setFitNonce((n) => n + 1) }
