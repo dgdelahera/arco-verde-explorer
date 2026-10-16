@@ -2,11 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Control, divIcon, DomEvent, latLng, latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
 import { AttributionControl, CircleMarker, MapContainer, Marker, Pane, Popup, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
-import { emptyFilters, filterRoutes, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
+import { emptyFilters, filterRoutes, norm, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
 import { distanceToGeometryMeters, lines, minDistanceToLines, routeEnds, type Position } from './geo'
 import { useOnline } from './online'
 import { Panel, type LocateStatus } from './Panel'
 import { decodePlan, loadDraft, MAX_POINTS, round5, saveDraft } from './plan'
+import { osmUrl, parsePois, POI_CATEGORIES, searchPois, type PoiCategory, type PoiFeature, type PoisData } from './pois'
 
 const NETWORK = '#0072b2'
 const SELECTED = '#c2185b'
@@ -78,19 +79,53 @@ function ShowAllControl({ onClick }: { onClick: () => void }) {
   return createPortal(<button type="button" className="show-all" onClick={onClick}>Ver toda la red</button>, el)
 }
 
+function fit(map: LeafletMap, bounds: LatLngBounds) {
+  const sheet = media('(max-width: 767px)') ? (document.querySelector<HTMLElement>('.panel')?.offsetHeight ?? 0) : 0
+  const box = map.getContainer().getBoundingClientRect()
+  const ctl = map.getContainer().querySelector('.leaflet-top.leaflet-left')!.getBoundingClientRect()
+  const [w, h] = [ctl.right - box.left, ctl.bottom - box.top]
+  // Padding is a rectangle, so clear the corner controls along whichever side costs less of the visible map.
+  const [left, top] = w / box.width < h / (box.height - sheet) ? [w, 0] : [0, h]
+  map.fitBounds(bounds, { paddingTopLeft: [24 + left, 48 + top], paddingBottomRight: [24, 24 + sheet], animate: !media('(prefers-reduced-motion: reduce)') })
+}
+
 function FitBounds({ bounds, nonce }: { bounds: LatLngBounds; nonce: number }) {
   const map = useMap()
-  useEffect(() => {
-    if (!bounds.isValid()) return
-    const sheet = media('(max-width: 767px)') ? (document.querySelector<HTMLElement>('.panel')?.offsetHeight ?? 0) : 0
-    const box = map.getContainer().getBoundingClientRect()
-    const ctl = map.getContainer().querySelector('.leaflet-top.leaflet-left')!.getBoundingClientRect()
-    const [w, h] = [ctl.right - box.left, ctl.bottom - box.top]
-    // Padding is a rectangle, so clear the corner controls along whichever side costs less of the visible map.
-    const [left, top] = w / box.width < h / (box.height - sheet) ? [w, 0] : [0, h]
-    map.fitBounds(bounds, { paddingTopLeft: [24 + left, 48 + top], paddingBottomRight: [24, 24 + sheet], animate: !media('(prefers-reduced-motion: reduce)') })
-  }, [map, bounds, nonce])
+  useEffect(() => { if (bounds.isValid()) fit(map, bounds) }, [map, bounds, nonce])
   return null
+}
+
+const poiIcons = Object.fromEntries(Object.entries(POI_CATEGORIES).map(([k, c]) => [k, divIcon({
+  className: 'poi-pin', html: `<span style="background:${c.color}">${c.letter}</span>`, iconSize: [24, 24],
+})]))
+
+function PoiLayer({ pois, focus }: { pois: PoiFeature[]; focus: { id: string } | null }) {
+  const map = useMap()
+  const markers = useRef(new Map<string, L.Marker>())
+  useEffect(() => {
+    const m = focus && markers.current.get(focus.id)
+    if (!m) return
+    fit(map, m.getLatLng().toBounds(400))
+    m.openPopup()
+  }, [map, focus, pois])
+  return (
+    <Pane name="pois" style={{ zIndex: 435 }}>
+      {pois.map((f) => {
+        const p = f.properties
+        const c = POI_CATEGORIES[p.category]
+        return (
+          <Marker key={p.id} position={[f.geometry.coordinates[1], f.geometry.coordinates[0]]} icon={poiIcons[p.category]} title={`${p.name ?? c.one} (${c.label})`}
+            ref={(m) => { if (m) markers.current.set(p.id, m); else markers.current.delete(p.id) }}>
+            <Popup>
+              <strong>{p.name ?? c.one}</strong><br />
+              {c.one}<br />
+              <a href={osmUrl(p.id)} target="_blank" rel="noopener noreferrer">Ver en OpenStreetMap</a>
+            </Popup>
+          </Marker>
+        )
+      })}
+    </Pane>
+  )
 }
 
 function hitTest(map: LeafletMap, routes: RouteFeature[], geoms: Map<string, Geo>, at: { x: number; y: number }, tol: number) {
@@ -218,6 +253,31 @@ export default function App() {
   const [planView, setPlanView] = useState<LatLngBounds | null>(null)
   const mapRef = useRef<LeafletMap>(null)
   const online = useOnline()
+  const [poiCats, setPoiCats] = useState<Set<PoiCategory>>(new Set())
+  const [pois, setPois] = useState<PoisData | 'idle' | 'loading' | 'error'>('idle')
+  const [poiFocus, setPoiFocus] = useState<{ id: string } | null>(null)
+  const loadPois = () => {
+    if (pois !== 'idle' && pois !== 'error') return
+    setPois('loading')
+    fetch('/data/pois.geojson')
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then((json) => setPois(parsePois(json)))
+      .catch(() => setPois('error'))
+  }
+  const poiData = typeof pois === 'object' ? pois : null
+  const poiMatches = useMemo(() => (poiData ? searchPois(poiData.pois, filters.q) : []), [poiData, filters.q])
+  const shownPois = useMemo(() => poiData?.pois.filter((f) => poiCats.has(f.properties.category)) ?? [], [poiData, poiCats])
+  const togglePoi = (c: PoiCategory) => {
+    if (!poiCats.has(c)) loadPois()
+    setPoiCats((s) => { const n = new Set(s); if (!n.delete(c)) n.add(c); return n })
+  }
+  const focusPoi = (f: PoiFeature) => {
+    setPoiCats((s) => new Set(s).add(f.properties.category))
+    setPoiFocus({ id: f.properties.id })
+  }
 
   useEffect(() => {
     fetch('/data/routes.geojson')
@@ -296,6 +356,7 @@ export default function App() {
 
   const changeFilters = (f: typeof filters) => {
     setFilters(f)
+    if (norm(f.q.trim()).length >= 3) loadPois()
     if (selectedId && !filterRoutes(data!.routes, f).some((r) => r.properties.id === selectedId)) select(null)
   }
 
@@ -350,6 +411,7 @@ export default function App() {
           exit: () => { setPlan(null); setPlanView(null) },
         }}
         onPlan={startPlan}
+        pois={{ active: poiCats, toggle: togglePoi, status: typeof pois === 'object' ? 'ready' : pois, metadata: poiData?.metadata ?? null, matches: poiMatches, focus: focusPoi }}
       />
       <section className="map" aria-label="Mapa de rutas">
         <MapContainer ref={mapRef} bounds={bounds} maxBounds={network?.pad(3)} maxBoundsViscosity={1} maxZoom={19} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
@@ -367,6 +429,7 @@ export default function App() {
               <CircleMarker center={[me[1], me[0]]} radius={8} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a56db', fillOpacity: 1, interactive: false }} />
             </Pane>
           )}
+          {!plan && <PoiLayer pois={shownPois} focus={poiFocus} />}
           {plan ? <PlanLayer points={plan.points} edit={editPlan} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
           <FitBounds bounds={bounds} nonce={fitNonce} />
         </MapContainer>

@@ -86,8 +86,8 @@ button:hover { background: #e8e8e8; }
 .intro { font-size: 0.9rem; margin: 0 0 0.5rem; }
 .section-title { font-size: 0.95rem; margin: 0.75rem 0 0.4rem; color: var(--muted); }
 .nearby { margin-top: 0.5rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.locate-msg { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: var(--muted); }
-.locate-msg[data-error='true'] { color: #8a1c1c; }
+.locate-msg, .poi-msg { flex-basis: 100%; margin: 0; font-size: 0.85rem; color: var(--muted); }
+.locate-msg[data-error='true'], .poi-msg[data-error='true'] { color: #8a1c1c; }
 .empty { padding: 0.5rem 0 1rem; }
 .route-meta { display: block; font-weight: 400; color: var(--muted); }
 .chooser p { margin: 0 0 0.4rem; font-weight: 600; }
@@ -103,6 +103,15 @@ button[aria-disabled='true'] { opacity: 0.6; cursor: progress; }
 .type-chips label { display: inline-flex; align-items: center; padding: 0.3rem 0.75rem; border: 1px solid var(--border); border-radius: 999px; background: #fff; cursor: pointer; font-size: 0.9rem; }
 .type-chips label:has(:checked) { background: #e9f3ec; border-color: var(--accent); font-weight: 600; }
 .type-chips label:has(:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.poi-chips { margin-top: 0.75rem; }
+.poi-chips legend { position: static; width: auto; height: auto; clip-path: none; flex-basis: 100%; font-size: 0.95rem; font-weight: 600; color: var(--muted); margin-bottom: 0.2rem; }
+.poi-badge, .poi-pin span { display: inline-flex; align-items: center; justify-content: center; width: 1.25rem; height: 1.25rem; border-radius: 50%; color: #fff; font: 700 0.75rem system-ui, sans-serif; font-style: normal; margin-right: 0.35rem; }
+.poi-pin span { width: 24px; height: 24px; margin: 0; border: 2px solid #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.45); }
+.poi-results p { margin: 0.25rem 0; font-size: 0.85rem; color: var(--muted); }
+.poi-results ul { list-style: none; margin: 0; padding: 0; }
+.poi-results button { display: flex; align-items: center; width: 100%; text-align: left; margin-bottom: 0.25rem; background: #fff; }
+.poi-results small { color: var(--muted); margin-left: 0.25rem; }
 
 .panel[data-planning='true'] .panel-body > :not(.planner, .attribution) { display: none; }
 .planner p { margin: 0 0 0.4rem; }
