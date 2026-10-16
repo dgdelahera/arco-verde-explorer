@@ -7,8 +7,9 @@ import { emptyFilters, filterRoutes, parseRoutes } from './filters'
 import { Panel, type LocateStatus, type Planner, type PoiPanel } from './Panel'
 import type { PoiFeature } from './pois'
 import { fixture } from './test/fixture'
+import { parseElevation, type ElevationData } from './elevation'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 const data = parseRoutes(fixture)
 const long = 'Texto largo. '.repeat(40)
@@ -19,14 +20,14 @@ const withProps = (id: string, extra: object) => ({
 
 const noPois: PoiPanel = { active: new Set(), toggle: () => {}, status: 'idle', metadata: null, matches: [], focus: () => {} }
 
-function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle', planner = null, onPlan = () => {}, pois = noPois }: {
+function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle', planner = null, onPlan = () => {}, pois = noPois, elevation = null }: {
   onSelect?: (id: string | null) => void; selectedId?: string | null; d?: typeof data; distances?: Map<string, number> | null; locateStatus?: LocateStatus
-  planner?: Planner | null; onPlan?: (seed?: number[][]) => void; pois?: PoiPanel
+  planner?: Planner | null; onPlan?: (seed?: number[][]) => void; pois?: PoiPanel; elevation?: ElevationData | null
 }) {
   const [filters, setFilters] = useState(emptyFilters)
   return (
     <Panel data={d} visible={filterRoutes(d.routes, filters)} filters={filters} onFiltersChange={setFilters}
-      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} pois={pois} />
+      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} pois={pois} elevation={elevation} />
   )
 }
 
@@ -254,10 +255,12 @@ it('shows planner metrics, labels and controls', async () => {
   const planner = { points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
   const writeText = vi.fn().mockResolvedValue(undefined)
   Object.assign(navigator, { clipboard: { writeText }, share: undefined })
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
   render(<Harness selectedId={null} planner={planner} />)
   const section = within(screen.getByRole('region', { name: 'Crear ruta' }))
   expect(section.getByText(/Distancia: 1 km/).closest('p')).toHaveTextContent('Distancia: 1 km · 2 puntos')
-  expect(section.getByText('Desnivel: no disponible (sin datos de altitud)')).toBeInTheDocument()
+  expect(section.getByText(/Desnivel estimado/)).toHaveTextContent('Desnivel estimado: calculando…')
+  expect(await section.findByText(/no se pudo consultar el modelo del terreno/, undefined, { timeout: 2000 })).toHaveTextContent('Desnivel estimado: no disponible')
   expect(section.getByText(/Duración estimada: 15 min/)).toHaveTextContent('a 4 km/h')
   expect(section.getByRole('note')).toHaveTextContent('Trazado manual — no es una ruta validada; puede cruzar fincas, carreteras o zonas no transitables.')
   expect(section.getByRole('button', { name: 'Deshacer' })).toBeDisabled()
@@ -273,6 +276,7 @@ it('shows planner metrics, labels and controls', async () => {
 it('adds a planner point at the map centre from the keyboard', () => {
   const planner = { points: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
   const { rerender } = render(<Harness selectedId={null} planner={planner} />)
+  expect(screen.queryByText(/Desnivel estimado/)).not.toBeInTheDocument()
   const add = screen.getByRole('button', { name: 'Añadir punto en el centro del mapa' })
   add.focus()
   fireEvent.click(add)
@@ -296,4 +300,28 @@ it('toggles POI categories, lists matching places and credits OpenStreetMap', ()
   expect(screen.getByText(/Ninguna ruta coincide con los filtros, pero hay un lugar con ese nombre/)).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'OpenStreetMap contributors' })).toHaveAttribute('href', 'https://www.openstreetmap.org/copyright')
   expect(screen.getByText(/ODbL, extraídos el 14 de octubre de 2026/)).toBeInTheDocument()
+})
+
+it('shows the computed profile and gain apart from the official desnivel, with source and limits', () => {
+  const elevation = parseElevation({
+    metadata: {
+      source: 'MDT25 del Instituto Geográfico Nacional (PNOA-LiDAR)', sourceUrl: 'https://www.scne.es/productos.html', serviceUrl: 'https://servicios.idee.es/wcs-inspire/mdt',
+      attribution: '© Instituto Geográfico Nacional', licence: 'CC BY 4.0 scne.es', licenceUrl: 'https://creativecommons.org/licenses/by/4.0/deed.es',
+      resolutionM: 25, sampleSpacingM: 50, smoothing: 'media móvil de 5 muestras', retrievedAt: '2026-10-16',
+    },
+    routes: { RL2: { gainM: 210, lossM: 180, minM: 640, maxM: 760, profile: [[0, 650], [8.8, 760], [17.6, 680]] } },
+  })
+  const { rerender } = render(<Harness elevation={elevation} />)
+  const details = within(screen.getByRole('article', { name: /Camino de Alcobendas/ }))
+  expect(details.getByText('Desnivel oficial').nextElementSibling).toHaveTextContent('250 m')
+  expect(details.getByText('Desnivel calculado').nextElementSibling).toHaveTextContent('+210 m / −180 m (modelo digital del terreno MDT25 del Instituto Geográfico Nacional (PNOA-LiDAR))')
+  expect(details.getByText('Altitud calculada').nextElementSibling).toHaveTextContent('640 m – 760 m')
+  const profile = details.getByRole('img', { name: /Perfil de elevación calculado: altitud entre 640 m y 760 m a lo largo de 17,6 km; desnivel \+210 m \/ −180 m/ })
+  expect([...profile.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['760 m', '640 m', '0 km', '17,6 km'])
+  expect(details.getByRole('link', { name: 'CC BY 4.0 scne.es' })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by/4.0/deed.es')
+  expect(details.getByText(/no recoge puentes ni pasos inferiores/)).toBeInTheDocument()
+
+  rerender(<Harness elevation={null} />)
+  expect(screen.queryByText('Desnivel calculado')).not.toBeInTheDocument()
+  expect(screen.getByText(/no se muestra perfil de elevación/)).toBeInTheDocument()
 })
