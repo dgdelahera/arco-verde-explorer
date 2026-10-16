@@ -54,7 +54,11 @@ function MapSetup({ network }: { network?: LatLngBounds }) {
     const c = map.getContainer()
     c.setAttribute('role', 'group')
     c.setAttribute('aria-label', 'Mapa interactivo de rutas. Usa las flechas para desplazarlo')
-    if (network) map.setMinZoom(map.getBoundsZoom(network) - 2)
+    if (!network) return
+    const limit = () => { const z = map.getBoundsZoom(network) - 2; if (Number.isFinite(z)) map.setMinZoom(z) }
+    limit()
+    map.on('resize', limit)
+    return () => { map.off('resize', limit) }
   }, [map, network])
   return null
 }
