@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
+import { createPortal } from 'react-dom'
+import { Control, DomEvent, latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
 import { AttributionControl, CircleMarker, MapContainer, Pane, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
 import { emptyFilters, filterRoutes, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
 import { distanceToGeometryMeters, lines, minDistanceToLines, routeEnds, type Position } from './geo'
 import { Panel, type LocateStatus } from './Panel'
 
-const COLORS = { corta: '#0072b2', larga: '#d55e00' }
+const NETWORK = '#0072b2'
+const SELECTED = '#c2185b'
 const media = (q: string) => matchMedia(q).matches
 
 type Geo = { positions: LatLngTuple[][]; bounds: LatLngBounds }
@@ -13,7 +15,7 @@ type Geo = { positions: LatLngTuple[][]; bounds: LatLngBounds }
 const positionsOf = (r: RouteFeature): LatLngTuple[][] =>
   lines(r.geometry).map((l) => l.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])).map(([lon, lat]) => [lat, lon]))
 
-type LineProps = { positions: LatLngTuple[][]; category: RouteFeature['properties']['category']; mode: 'normal' | 'selected' | 'dimmed'; casing?: boolean }
+type LineProps = { positions: LatLngTuple[][]; mode: 'normal' | 'selected' | 'dimmed'; casing?: boolean }
 
 function Endpoint({ at, label, color }: { at: Position; label: string; color: string }) {
   return (
@@ -36,23 +38,37 @@ function Endpoints({ route }: { route: RouteFeature }) {
   )
 }
 
-const RouteLine = memo(function RouteLine({ positions, category, mode, casing }: LineProps) {
+const RouteLine = memo(function RouteLine({ positions, mode, casing }: LineProps) {
   const weight = mode === 'selected' ? 7 : mode === 'dimmed' ? 3 : 4
+  const opacity = mode === 'dimmed' ? 0.4 : 1
   const pathOptions = useMemo(
-    () => (casing ? { color: '#fff', weight: weight + 3, interactive: false } : { color: COLORS[category] ?? COLORS.larga, weight, interactive: false, dashArray: category === 'corta' ? undefined : '10 6' }),
-    [casing, category, weight],
+    () => ({ color: casing ? '#fff' : mode === 'selected' ? SELECTED : NETWORK, weight: casing ? weight + 3 : weight, opacity, interactive: false }),
+    [casing, mode, weight, opacity],
   )
   return <Polyline positions={positions} pathOptions={pathOptions} />
 })
 
-function MapSetup() {
+function MapSetup({ network }: { network?: LatLngBounds }) {
   const map = useMap()
   useEffect(() => {
     const c = map.getContainer()
     c.setAttribute('role', 'group')
     c.setAttribute('aria-label', 'Mapa interactivo de rutas. Usa las flechas para desplazarlo')
-  }, [map])
+    if (network) map.setMinZoom(map.getBoundsZoom(network) - 2)
+  }, [map, network])
   return null
+}
+
+function ShowAllControl({ onClick }: { onClick: () => void }) {
+  const map = useMap()
+  const [el] = useState(() => { const d = document.createElement('div'); d.className = 'leaflet-control'; DomEvent.disableClickPropagation(d); return d })
+  useEffect(() => {
+    const c = new Control({ position: 'topleft' })
+    c.onAdd = () => el
+    c.addTo(map)
+    return () => { c.remove() }
+  }, [map, el])
+  return createPortal(<button type="button" className="show-all" onClick={onClick}>Ver toda la red</button>, el)
 }
 
 function FitBounds({ bounds, nonce }: { bounds: LatLngBounds; nonce: number }) {
@@ -157,6 +173,7 @@ export default function App() {
   const [fitNonce, setFitNonce] = useState(0)
   const [me, setMe] = useState<[number, number] | null>(null)
   const [locateStatus, setLocateStatus] = useState<LocateStatus>('idle')
+  const [nearMe, setNearMe] = useState(false)
 
   useEffect(() => {
     fetch('/data/routes.geojson')
@@ -190,6 +207,12 @@ export default function App() {
     () => new Map((data?.routes ?? []).map((r) => { const positions = positionsOf(r); return [r.properties.id, { positions, bounds: latLngBounds(positions.flat()) }] as const })),
     [data],
   )
+  // maxBounds pads the network generously: on mobile the bottom sheet pushes the fitted view well south of the routes.
+  const network = useMemo(() => {
+    const b = latLngBounds([])
+    for (const g of geoms.values()) b.extend(g.bounds)
+    return b.isValid() ? b : undefined
+  }, [geoms])
   const visible = useMemo(() => (data ? filterRoutes(data.routes, filters) : []), [data, filters])
   const selected = visible.find((r) => r.properties.id === selectedId) ?? null
   const selectedBounds = selected ? geoms.get(selected.properties.id)!.bounds : null
@@ -202,7 +225,7 @@ export default function App() {
     [visible, distances],
   )
 
-  const nearest = me && listed[0] ? geoms.get(listed[0].properties.id)!.bounds : null
+  const nearest = nearMe && me && listed[0] ? geoms.get(listed[0].properties.id)!.bounds : null
   const bounds = useMemo(() => {
     if (selectedBounds) return selectedBounds
     const all = latLngBounds([])
@@ -220,7 +243,7 @@ export default function App() {
     if (!navigator.geolocation) return setLocateStatus('unsupported')
     setLocateStatus('loading')
     navigator.geolocation.getCurrentPosition(
-      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('done'); setFitNonce((n) => n + 1) },
+      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('done'); setNearMe(true); setFitNonce((n) => n + 1) },
       (e) => setLocateStatus(e.code === e.PERMISSION_DENIED ? 'denied' : 'error'),
       { timeout: 15000 },
     )
@@ -229,11 +252,11 @@ export default function App() {
   if (error) return <p className="status" role="alert">No se pudieron cargar las rutas ({error}). Recarga la página o inténtalo más tarde.</p>
   if (!data) return <p className="status" role="status">Cargando rutas…</p>
 
+  const showAll = () => { setFilters(emptyFilters); select(null); setNearMe(false); setFitNonce((n) => n + 1) }
   const line = (r: RouteFeature, casing?: boolean) => (
     <RouteLine
       key={r.properties.id}
       positions={geoms.get(r.properties.id)!.positions}
-      category={r.properties.category}
       mode={!selected ? 'normal' : r === selected ? 'selected' : 'dimmed'}
       casing={casing}
     />
@@ -249,20 +272,19 @@ export default function App() {
         onFiltersChange={changeFilters}
         selectedId={selected?.properties.id ?? null}
         onSelect={select}
-        onShowAll={() => { setFilters(emptyFilters); select(null); setFitNonce((n) => n + 1) }}
         distances={distances}
         locateStatus={locateStatus}
         onLocate={locate}
       />
       <section className="map" aria-label="Mapa de rutas">
-        <MapContainer bounds={bounds} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
-          <MapSetup />
+        <MapContainer bounds={bounds} maxBounds={network?.pad(3)} maxBoundsViscosity={1} maxZoom={19} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
+          <MapSetup network={network} />
           <ZoomControl zoomInTitle="Acercar" zoomOutTitle="Alejar" />
+          <ShowAllControl onClick={showAll} />
           <AttributionControl position={media('(max-width: 767px)') ? 'topright' : 'bottomright'} />
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
+          <TileLayer maxZoom={19} url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
           <Pane name="casing" style={{ zIndex: 395 }}>{visible.map((r) => line(r, true))}</Pane>
-          {others.filter((r) => r.properties.category !== 'corta').map((r) => line(r))}
-          <Pane name="corta" style={{ zIndex: 410 }}>{others.filter((r) => r.properties.category === 'corta').map((r) => line(r))}</Pane>
+          {others.map((r) => line(r))}
           <Pane name="selected" style={{ zIndex: 420 }}>{selected && line(selected)}</Pane>
           {selected && <Pane name="ends" style={{ zIndex: 425 }}><Endpoints route={selected} /></Pane>}
           {me && (

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { distinct, emptyFilters, lengthMismatch, type Filters, type RouteFeature, type RoutesData } from './filters'
+import { distinct, emptyFilters, lengthMismatch, type Filters, type Metadata, type RouteFeature, type RoutesData } from './filters'
 import { directionsUrls, toGpx } from './geo'
 
 export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
@@ -28,13 +28,12 @@ type Props = {
   onFiltersChange: (f: Filters) => void
   selectedId: string | null
   onSelect: (id: string | null) => void
-  onShowAll: () => void
   distances: Map<string, number> | null
   locateStatus: LocateStatus
   onLocate: () => void
 }
 
-export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, onShowAll, distances, locateStatus, onLocate }: Props) {
+export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate }: Props) {
   const [open, setOpen] = useState(true)
   const [full, setFull] = useState(false)
   const props = data.routes.map((r) => r.properties)
@@ -123,14 +122,15 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
         <div className="nearby">
           <button type="button" onClick={() => locateStatus !== 'loading' && onLocate()} aria-disabled={locateStatus === 'loading'}>Cerca de mí</button>
-          <button type="button" onClick={onShowAll}>Ver todas</button>
           <p role="status" className="locate-msg" data-error={locateStatus !== 'idle' && locateStatus !== 'loading' && locateStatus !== 'done'}>{LOCATE_MESSAGES[locateStatus]}</p>
         </div>
 
         <h2 className="section-title" id="routes-heading" tabIndex={-1} ref={routesHeading}>Rutas</h2>
-        <p className="count">
-          <span aria-live="polite" aria-atomic="true">{visible.length} de {data.routes.length} rutas</span>
-          <span className="legend"><i className="swatch corta" /> Corta <i className="swatch larga" /> Larga</span>
+        <p className="count" aria-live="polite" aria-atomic="true">{visible.length} de {data.routes.length} rutas</p>
+        <p className="legend">
+          <span><i className="swatch" /> Red oficial</span>
+          <span><i className="swatch selected" /> Ruta seleccionada</span>
+          <span><i className="dot start" /><i className="dot end" /> Inicio / Fin</span>
         </p>
 
         {visible.length === 0 && (
@@ -143,14 +143,14 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
         <ul className="route-list">
           {visible.map((feature) => { const p = feature.properties; return (
             <li key={p.id} id={`route-${p.id}`}>
-              <button type="button" className={`route-item ${p.category}`} aria-expanded={p.id === selectedId} onClick={() => onSelect(p.id === selectedId ? null : p.id)}>
+              <button type="button" className="route-item" aria-expanded={p.id === selectedId} onClick={() => onSelect(p.id === selectedId ? null : p.id)}>
                 <span className="route-id">{p.id}</span>
                 <span className="route-name">{p.name}
                   <small className="route-meta">{summary(p)}{distances?.has(p.id) && ` · a ${km(distances.get(p.id)!)}`}</small>
                 </span>
                 <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
               </button>
-              {p.id === selectedId && <Details route={feature} />}
+              {p.id === selectedId && <Details route={feature} metadata={data.metadata} />}
             </li>
           )})}
         </ul>
@@ -169,7 +169,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
   )
 }
 
-function Details({ route }: { route: RouteFeature }) {
+function Details({ route, metadata }: { route: RouteFeature; metadata: Metadata | null }) {
   const p = route.properties
   const [more, setMore] = useState(false)
   const [shareMsg, setShareMsg] = useState('')
@@ -227,6 +227,12 @@ function Details({ route }: { route: RouteFeature }) {
         <dt>Sector</dt><dd>{orNA(p.sector)}</dd>
         <dt>Municipios</dt><dd>{orNA(p.municipalities.join(', '))}</dd>
       </dl>
+      {metadata && (
+        <p className="note">
+          Datos oficiales: <a href={metadata.sourceUrl} target="_blank" rel="noopener noreferrer">{metadata.source}</a>, extraídos el {longDate(metadata.extractedAt)}.
+          La longitud calculada es un cálculo propio.
+        </p>
+      )}
       <p className="note">
         Puedes importarlo en Strava (web: Mis rutas → Crear ruta → subir archivo) o abrirlo con Wikiloc, OsmAnd u otra app de rutas.
         Es el track oficial sin puntos duplicados y simplificado con un margen de unos 5 m; también está el <a href={p.gpxUrl} target="_blank" rel="noopener noreferrer">GPX original</a>.
