@@ -1,13 +1,15 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Control, DomEvent, latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
-import { AttributionControl, CircleMarker, MapContainer, Pane, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
+import { Control, divIcon, DomEvent, latLng, latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
+import { AttributionControl, CircleMarker, MapContainer, Marker, Pane, Popup, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
 import { emptyFilters, filterRoutes, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
 import { distanceToGeometryMeters, lines, minDistanceToLines, routeEnds, type Position } from './geo'
 import { Panel, type LocateStatus } from './Panel'
+import { decodePlan, loadDraft, MAX_POINTS, round5, saveDraft } from './plan'
 
 const NETWORK = '#0072b2'
 const SELECTED = '#c2185b'
+const PLAN = '#e66100'
 const media = (q: string) => matchMedia(q).matches
 
 type Geo = { positions: LatLngTuple[][]; bounds: LatLngBounds }
@@ -169,6 +171,34 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
   return null
 }
 
+type Edit = (f: (points: Position[]) => Position[]) => void
+const pin = (n: number) => divIcon({ className: 'plan-pin', html: String(n), iconSize: [32, 32] })
+
+function PlanLayer({ points, edit }: { points: Position[]; edit: Edit }) {
+  const map = useMap()
+  const dragEnd = useRef(0)
+  useEffect(() => {
+    // The mouseup ending a marker drag can also reach the map as a click.
+    const onClick = (e: L.LeafletMouseEvent) => Date.now() - dragEnd.current > 300 && edit((p) => [...p, [round5(e.latlng.lng), round5(e.latlng.lat)]])
+    map.on('click', onClick)
+    map.doubleClickZoom.disable()
+    map.getContainer().style.cursor = 'crosshair'
+    return () => { map.off('click', onClick); map.doubleClickZoom.enable(); map.getContainer().style.cursor = '' }
+  }, [map, edit])
+  return (
+    <Pane name="plan" style={{ zIndex: 440 }}>
+      <Polyline positions={points.map(([lon, lat]) => [lat, lon])} pathOptions={{ color: PLAN, weight: 4, dashArray: '8 6', interactive: false }} />
+      {points.map(([lon, lat], i) => (
+        <Marker key={i} position={[lat, lon]} icon={pin(i + 1)} draggable title={`Punto ${i + 1}: arrástralo para moverlo o púlsalo para eliminarlo`} eventHandlers={{
+          dragend: (e) => { dragEnd.current = Date.now(); const ll = e.target.getLatLng(); edit((p) => p.map((q, j) => (j === i ? [round5(ll.lng), round5(ll.lat)] : q))) },
+        }}>
+          <Popup><button type="button" onClick={() => { map.closePopup(); edit((p) => p.filter((_, j) => j !== i)) }}>Eliminar punto {i + 1}</button></Popup>
+        </Marker>
+      ))}
+    </Pane>
+  )
+}
+
 export default function App() {
   const [data, setData] = useState<RoutesData | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -178,6 +208,8 @@ export default function App() {
   const [me, setMe] = useState<[number, number] | null>(null)
   const [locateStatus, setLocateStatus] = useState<LocateStatus>('idle')
   const [nearMe, setNearMe] = useState(false)
+  const [plan, setPlan] = useState<{ points: Position[]; past: Position[][]; edited?: boolean } | null>(null)
+  const [planView, setPlanView] = useState<LatLngBounds | null>(null)
 
   useEffect(() => {
     fetch('/data/routes.geojson')
@@ -185,21 +217,36 @@ export default function App() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return res.json()
       })
-      .then((json) => {
-        const d = parseRoutes(json)
-        setData(d)
-        setSelectedId(routeIdFromHash(location.hash, d.routes.map((r) => r.properties.id)))
-      })
+      .then((json) => setData(parseRoutes(json)))
       .catch((e: Error) => setError(e.message))
   }, [])
+
+  const startPlan = useCallback((seed?: Position[]) => {
+    const draft = loadDraft()
+    const points = seed ?? draft
+    setPlan({ points, past: seed && draft.length ? [draft] : [] })
+    setPlanView(points.length ? latLng(points[0][1], points[0][0]).toBounds(2000).extend(latLngBounds(points.map(([lon, lat]) => [lat, lon])).pad(0.25)) : null)
+  }, [])
+  const editPlan = useCallback<Edit>((f) => setPlan((p) => {
+    if (!p) return p
+    const points = f(p.points)
+    return points.length > MAX_POINTS ? p : { points, past: [...p.past, p.points], edited: true }
+  }), [])
+  useEffect(() => { if (plan?.edited) saveDraft(plan.points) }, [plan])
 
   useEffect(() => {
     if (!data) return
     const ids = data.routes.map((r) => r.properties.id)
-    const onHash = () => setSelectedId(routeIdFromHash(location.hash, ids))
+    const onHash = () => {
+      const points = decodePlan(location.hash)
+      if (!points) return setSelectedId(routeIdFromHash(location.hash, ids))
+      history.replaceState(null, '', location.pathname + location.search)
+      startPlan(points)
+    }
+    onHash()
     addEventListener('hashchange', onHash)
     return () => removeEventListener('hashchange', onHash)
-  }, [data])
+  }, [data, startPlan])
 
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
@@ -231,12 +278,13 @@ export default function App() {
 
   const nearest = nearMe && me && listed[0] ? geoms.get(listed[0].properties.id)!.bounds : null
   const bounds = useMemo(() => {
+    if (planView) return planView
     if (selectedBounds) return selectedBounds
     const all = latLngBounds([])
     if (me && nearest) return all.extend(nearest).extend([me[1], me[0]])
     for (const r of visible) all.extend(geoms.get(r.properties.id)!.bounds)
     return all
-  }, [selectedBounds, visible, geoms, me, nearest])
+  }, [planView, selectedBounds, visible, geoms, me, nearest])
 
   const changeFilters = (f: typeof filters) => {
     setFilters(f)
@@ -279,6 +327,14 @@ export default function App() {
         distances={distances}
         locateStatus={locateStatus}
         onLocate={locate}
+        planner={plan && {
+          points: plan.points,
+          canUndo: plan.past.length > 0,
+          undo: () => setPlan({ points: plan.past.at(-1)!, past: plan.past.slice(0, -1), edited: true }),
+          clear: () => editPlan(() => []),
+          exit: () => { setPlan(null); setPlanView(null) },
+        }}
+        onPlan={startPlan}
       />
       <section className="map" aria-label="Mapa de rutas">
         <MapContainer bounds={bounds} maxBounds={network?.pad(3)} maxBoundsViscosity={1} maxZoom={19} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
@@ -296,7 +352,7 @@ export default function App() {
               <CircleMarker center={[me[1], me[0]]} radius={8} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a56db', fillOpacity: 1, interactive: false }} />
             </Pane>
           )}
-          <Picking visible={visible} geoms={geoms} onSelect={select} />
+          {plan ? <PlanLayer points={plan.points} edit={editPlan} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
           <FitBounds bounds={bounds} nonce={fitNonce} />
         </MapContainer>
       </section>

@@ -99,6 +99,11 @@ button[aria-disabled='true'] { opacity: 0.6; cursor: progress; }
 .type-chips label:has(:checked) { background: #e9f3ec; border-color: var(--accent); font-weight: 600; }
 .type-chips label:has(:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
 
+.panel[data-planning='true'] .panel-body > :not(.planner, .attribution) { display: none; }
+.planner p { margin: 0 0 0.4rem; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.plan-pin { display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #e66100; border: 3px solid #fff; color: #fff; font-weight: 700; font-size: 0.8rem; box-shadow: 0 1px 4px rgb(0 0 0 / 0.4); }
+
 .attribution { margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
 .attribution p { margin: 0.25rem 0; }
 
