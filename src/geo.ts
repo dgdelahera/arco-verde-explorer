@@ -41,16 +41,48 @@ export function minDistanceToLines(p: Position, polylines: Position[][]): number
   return best
 }
 
-export function distanceToGeometryMeters(point: Position, geometry: GeoJSON.Geometry): number {
+function nearestOnGeometry(point: Position, geometry: GeoJSON.Geometry): { at: Position | null; m: number } {
   const k = Math.cos((point[1] * Math.PI) / 180)
   const flat = (q: Position) => [q[0] * k, q[1]]
-  let best = Infinity
+  let best: { at: Position | null; m: number } = { at: null, m: Infinity }
   for (const line of lines(geometry))
     for (let i = 1; i < line.length; i++) {
       const c = closestOnSegment(flat(point), flat(line[i - 1]), flat(line[i]))
-      best = Math.min(best, haversineMeters(point, [c[0] / k, c[1]]))
+      const at = [c[0] / k, c[1]]
+      const m = haversineMeters(point, at)
+      if (m < best.m) best = { at, m }
     }
   return best
+}
+
+export function distanceToGeometryMeters(point: Position, geometry: GeoJSON.Geometry): number {
+  return nearestOnGeometry(point, geometry).m
+}
+
+export const SNAP_M = 300
+const bboxes = new WeakMap<GeoJSON.Geometry, number[]>()
+const bboxOf = (g: GeoJSON.Geometry) => {
+  let b = bboxes.get(g)
+  if (!b) {
+    b = [Infinity, Infinity, -Infinity, -Infinity]
+    for (const l of lines(g)) for (const [x, y] of l) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)]
+    bboxes.set(g, b)
+  }
+  return b
+}
+
+/** Nearest point on any of the tracks, or null when none is within `maxM`. */
+export function snapToNetwork(point: Position, tracks: GeoJSON.Geometry[], maxM = SNAP_M): Position | null {
+  const dLat = maxM / 111_000
+  const dLon = dLat / Math.cos((point[1] * Math.PI) / 180)
+  let best: { at: Position | null; m: number } = { at: null, m: maxM }
+  for (const g of tracks) {
+    const [x0, y0, x1, y1] = bboxOf(g)
+    if (point[0] < x0 - dLon || point[0] > x1 + dLon || point[1] < y0 - dLat || point[1] > y1 + dLat) continue
+    const n = nearestOnGeometry(point, g)
+    if (n.m <= best.m) best = n
+  }
+  return best.at
 }
 
 export function routeEnds(geometry: GeoJSON.Geometry): { start: Position; end: Position } | null {
@@ -60,7 +92,26 @@ export function routeEnds(geometry: GeoJSON.Geometry): { start: Position; end: P
   return { start: ls[0][0], end: last[last.length - 1] }
 }
 
-const MAPS_DIR = 'https://www.google.com/maps/dir/?api=1&travelmode=transit'
+/** Track ends to mark: loops and out-and-back tracks share one marker only when they really close (within 200 m). */
+export function endMarkers(geometry: GeoJSON.Geometry, type: string | null): { at: Position; label: 'Inicio' | 'Fin' | 'Inicio y fin' }[] {
+  const ends = routeEnds(geometry)
+  if (!ends) return []
+  const loop = type === 'Circular' || type === 'Ida y vuelta'
+  if (loop && haversineMeters(ends.start, ends.end) <= 200) return [{ at: ends.start, label: 'Inicio y fin' }]
+  if (!loop && type !== 'Lineal') return [{ at: ends.start, label: 'Inicio' }]
+  return [{ at: ends.start, label: 'Inicio' }, { at: ends.end, label: 'Fin' }]
+}
+
+/** fitBounds padding that clears the corner controls and the bottom sheet, but never leaves less than `min` px of map height. */
+export function fitPadding(width: number, height: number, ctl: [number, number], sheet: number, min = 120): { tl: [number, number]; br: [number, number] } {
+  const [w, h] = ctl
+  const cap = (top: number) => Math.max(0, Math.min(sheet, height - 72 - top - min))
+  // Padding is a rectangle, so clear the corner controls along whichever side costs less of the visible map.
+  const [left, top] = w / width < h / (height - cap(0)) ? [w, 0] : [0, h]
+  return { tl: [24 + left, 48 + top], br: [24, 24 + cap(top)] }
+}
+
+const MAPS_DIR ='https://www.google.com/maps/dir/?api=1&travelmode=transit'
 const latLon = (p: Position) => `${p[1]},${p[0]}`
 
 /** Google Maps transit directions to the start and, for linear routes, back from the end. Loops and out-and-back tracks don't always close, so the official type decides. */

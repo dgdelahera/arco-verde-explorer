@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { distinct, emptyFilters, lengthMismatch, type Filters, type Metadata, type RouteFeature, type RoutesData } from './filters'
 import { directionsUrls, routeEnds, toGpx, type Position } from './geo'
-import { MAX_POINTS, planHash, planLine, planMeters } from './plan'
+import { MAX_POINTS, openableDraft, planHash, planLine, planMeters } from './plan'
 import { POI_CATEGORIES, type PoiCategory, type PoiFeature } from './pois'
+import { useOnline } from './online'
+import { OfflineBanner } from './OfflineBanner'
 import { buildProfile, lookupElevations, sampleLines, tileKey, type ElevationData, type ElevationMeta, type Grid, type Profile } from './elevation'
 
 export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
@@ -68,10 +70,10 @@ export type PoiPanel = {
 
 const Badge = ({ c }: { c: PoiCategory }) => <i className="poi-badge" style={{ background: POI_CATEGORIES[c].color }} aria-hidden="true">{POI_CATEGORIES[c].letter}</i>
 
-export type Planner = { points: Position[]; canUndo: boolean; undo: () => void; clear: () => void; exit: () => void; addCenter: () => void }
+export type Planner = { points: Position[]; canUndo: boolean; undo: () => void; clear: () => void; exit: () => void; addCenter: () => void; message?: string }
 
 const summary = (p: RouteFeature['properties']) =>
-  [CATEGORY[p.category], p.type, p.elevationGainM !== null && `desnivel ${p.elevationGainM} m`].filter(Boolean).join(' · ')
+  [CATEGORY[p.category], p.type, p.elevationGainM !== null && `dif. altitud ${p.elevationGainM} m (oficial)`].filter(Boolean).join(' · ')
 
 type Props = {
   data: RoutesData
@@ -87,9 +89,10 @@ type Props = {
   onPlan: (seed?: Position[]) => void
   pois: PoiPanel
   elevation?: ElevationData | null
+  notice?: string
 }
 
-export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan, pois, elevation = null }: Props) {
+export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan, pois, elevation = null, notice }: Props) {
   const [open, setOpen] = useState(true)
   const [full, setFull] = useState(false)
   const props = data.routes.map((r) => r.properties)
@@ -100,6 +103,13 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
   const active = Object.entries(filters).filter(([k, v]) => k !== 'type' && v).length
   const [filtersOpen] = useState(() => !window.matchMedia?.('(max-width: 767px)').matches)
   const routesHeading = useRef<HTMLHeadingElement>(null)
+  const createButton = useRef<HTMLButtonElement>(null)
+  const planning = !!planner
+  const wasPlanning = useRef(planning)
+  useEffect(() => {
+    if (wasPlanning.current && !planning) createButton.current?.focus()
+    wasPlanning.current = planning
+  }, [planning])
 
   const [prevSelected, setPrevSelected] = useState(selectedId)
   if (prevSelected !== selectedId) {
@@ -122,10 +132,11 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
         <button type="button" className="sheet-toggle" aria-label="Ampliar panel" aria-pressed={full} onClick={() => { setFull(!full); setOpen(true) }}>
           Ampliar
         </button>
+        <OfflineBanner />
       </header>
 
       <div id="panel-body" className="panel-body">
-        {planner && <PlannerSection planner={planner} />}
+        {planner && <PlannerSection planner={{ ...planner, addCenter: () => { setFull(false); planner.addCenter() } }} />}
         {data.metadata && (
           <p className="intro">
             {data.routes.length} rutas oficiales del Arco Verde de la Comunidad de Madrid.{' '}
@@ -172,7 +183,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
               <input type="number" min="0" step="0.5" inputMode="decimal" name="maxKm" value={filters.maxKm} onChange={set('maxKm')} />
             </label>
             {hasGain && (
-              <label>Desnivel máx. (m)
+              <label>Dif. altitud máx. (m, oficial)
                 <input type="number" min="0" step="50" inputMode="numeric" name="maxGain" value={filters.maxGain} onChange={set('maxGain')} />
               </label>
             )}
@@ -206,8 +217,9 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
         <div className="nearby">
           <button type="button" onClick={() => locateStatus !== 'loading' && onLocate()} aria-disabled={locateStatus === 'loading'}>Cerca de mí</button>
-          <button type="button" onClick={() => onPlan()}>Crear ruta</button>
+          {!planner && <button type="button" ref={createButton} onClick={() => onPlan()}>Crear ruta</button>}
           <p role="status" className="locate-msg" data-error={locateStatus !== 'idle' && locateStatus !== 'loading' && locateStatus !== 'done'}>{LOCATE_MESSAGES[locateStatus]}</p>
+          <p role="status" className="locate-msg" data-error="true">{notice}</p>
         </div>
 
         <h2 className="section-title" id="routes-heading" tabIndex={-1} ref={routesHeading}>Rutas</h2>
@@ -235,7 +247,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
                 </span>
                 <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
               </button>
-              {p.id === selectedId && <Details route={feature} metadata={data.metadata} onPlan={onPlan} elevation={elevation?.routes[p.id] ? { meta: elevation.metadata, profile: elevation.routes[p.id] } : null} />}
+              {p.id === selectedId && <Details route={feature} tracks={data.routes.map((r) => r.geometry)} metadata={data.metadata} onPlan={onPlan} elevation={elevation?.routes[p.id] ? { meta: elevation.metadata, profile: elevation.routes[p.id] } : null} />}
             </li>
           )})}
         </ul>
@@ -300,6 +312,7 @@ type PlanElevation = { key: string; profile: Profile | null; reason?: string }
 
 function usePlanElevation(points: Position[]): PlanElevation | null {
   const key = planHash(points)
+  const online = useOnline()
   const samples = useMemo(() => sampleLines([points]), [points])
   const tooLarge = new Set(samples.map((s) => tileKey(s.p))).size > PLAN_MAX_TILES
   const [result, setResult] = useState<PlanElevation | null>(null)
@@ -313,20 +326,30 @@ function usePlanElevation(points: Position[]): PlanElevation | null {
         .catch(() => { if (!ctrl.signal.aborted) setResult({ key, profile: null, reason: 'no se pudo consultar el modelo del terreno' }) })
     }, 800)
     return () => { clearTimeout(timer); ctrl.abort() }
-  }, [samples, tooLarge, key])
+  }, [samples, tooLarge, key, online])
   if (samples.length < 2) return { key, profile: null }
   if (tooLarge) return { key, profile: null, reason: 'trazado demasiado extenso para calcularlo en el navegador' }
   return result?.key === key ? result : null
 }
 
-function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCenter } }: { planner: Planner }) {
+function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCenter, message } }: { planner: Planner }) {
   const [shareMsg, share] = useShare()
   const m = planMeters(points)
   const ele = usePlanElevation(points)
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => heading.current?.focus(), [])
+  const status = `${points.length} ${points.length === 1 ? 'punto' : 'puntos'}, ${km(m / 1000)}`
+  const [announced, setAnnounced] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setAnnounced(status), 1000)
+    return () => clearTimeout(t)
+  }, [status])
   return (
     <section className="planner" aria-labelledby="planner-heading">
-      <h2 className="section-title" id="planner-heading">Crear ruta</h2>
-      <p className="note">Toca el mapa para añadir puntos. Arrástralos para moverlos o púlsalos para eliminarlos.</p>
+      <h2 className="section-title" id="planner-heading" tabIndex={-1} ref={heading}>Crear ruta</h2>
+      <p className="note">Toca o haz clic en el mapa, o usa «Añadir punto en el centro del mapa»: cada punto se ajusta al camino oficial más cercano (a menos de 300 m). Pulsa un punto (o Intro) para eliminarlo; arrástralo para moverlo.</p>
+      <p role="status" className="locate-msg" data-error="true">{message}</p>
+      <p role="status" className="visually-hidden">{announced}</p>
       <div className="actions">
         <button type="button" onClick={addCenter} disabled={points.length >= MAX_POINTS}>Añadir punto en el centro del mapa</button>
         <button type="button" onClick={undo} disabled={!canUndo}>Deshacer</button>
@@ -336,8 +359,8 @@ function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCent
         <button type="button" disabled={!points.length} onClick={() => share('Trazado manual', pageUrl(planHash(points)))}>Compartir</button>
         <span role="status" className="note">{shareMsg}</span>
       </div>
-      <p aria-live="polite"><strong>Distancia: {km(m / 1000)}</strong> · {points.length} {points.length === 1 ? 'punto' : 'puntos'}{points.length >= MAX_POINTS && ` (máximo ${MAX_POINTS})`}</p>
-      <p aria-live="polite">
+      <p><strong>Distancia: {km(m / 1000)}</strong> · {points.length} {points.length === 1 ? 'punto' : 'puntos'}{points.length >= MAX_POINTS && ` (máximo ${MAX_POINTS})`}</p>
+      <p>
         {points.length > 1 && <>
           Desnivel estimado:{' '}
           {!ele ? 'calculando…'
@@ -347,30 +370,38 @@ function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCent
       </p>
       {ele?.profile && <ElevationProfile data={ele.profile} label="Perfil de elevación estimado" />}
       {points.length > 1 && <p>Duración estimada: {minutes(m)} <small>(a 4 km/h, sin paradas ni desnivel)</small></p>}
-      <p className="warnings" role="note">Trazado manual — no es una ruta validada; puede cruzar fincas, carreteras o zonas no transitables.</p>
+      <p className="warnings" role="note">Trazado manual — no es una ruta validada. Los puntos se ajustan a los caminos oficiales, pero entre un punto y otro se traza una línea recta que puede atajar por fincas, carreteras o zonas no transitables.</p>
     </section>
   )
 }
 
 type RouteElevation = { meta: ElevationMeta; profile: Profile } | null
 
-function Details({ route, metadata, onPlan, elevation }: { route: RouteFeature; metadata: Metadata | null; onPlan: (seed?: Position[]) => void; elevation: RouteElevation }) {
+function Details({ route, tracks, metadata, onPlan, elevation }: { route: RouteFeature; tracks: GeoJSON.Geometry[]; metadata: Metadata | null; onPlan: (seed?: Position[]) => void; elevation: RouteElevation }) {
   const p = route.properties
   const [more, setMore] = useState(false)
   const [shareMsg, share] = useShare()
   const directions = directionsUrls(route.geometry, p.type)
   const start = routeEnds(route.geometry)?.start
   const long = (p.description?.length ?? 0) > 280
+  const online = useOnline()
+  const external = (href: string, label: string) => online
+    ? <a className="btn" href={href} target="_blank" rel="noopener noreferrer">{label}</a>
+    : <a className="btn" role="link" aria-disabled="true">{label} (requiere conexión)</a>
+  const seed = (start: Position) => {
+    const saved = openableDraft(tracks)?.length ?? 0
+    if (!saved || window.confirm(`Ya tienes un trazado guardado de ${saved} ${saved === 1 ? 'punto' : 'puntos'}. ¿Sustituirlo por uno nuevo desde esta ruta?`)) onPlan([start])
+  }
   return (
     <article className="details" aria-label={`Detalles de ${p.name}`}>
       <h3>{p.name} <span className="route-id">{p.id}</span></h3>
       <div className="actions">
         <button type="button" className="btn primary" onClick={() => download(`arco-verde-${p.id}.gpx`, toGpx(`${p.id} ${p.name}`, route.geometry))}>Descargar GPX</button>
-        {directions && <a className="btn" href={directions.toStart} target="_blank" rel="noopener noreferrer">Cómo llegar al inicio</a>}
-        {directions?.fromEnd && <a className="btn" href={directions.fromEnd} target="_blank" rel="noopener noreferrer">Volver desde el final</a>}
-        {p.planUrl && <a className="btn" href={p.planUrl} target="_blank" rel="noopener noreferrer">Plano (PDF)</a>}
+        {directions && external(directions.toStart, 'Cómo llegar al inicio')}
+        {directions?.fromEnd && external(directions.fromEnd, 'Volver desde el final')}
+        {p.planUrl && external(p.planUrl, 'Plano (PDF)')}
         <button type="button" onClick={() => share(p.name, pageUrl(`#${p.id}`))}>Compartir</button>
-        {start && <button type="button" onClick={() => onPlan([start])}>Empezar desde esta ruta</button>}
+        {start && <button type="button" onClick={() => seed(start)}>Empezar desde esta ruta</button>}
         <span role="status" className="note">{shareMsg}</span>
       </div>
       {p.notice && <p className="warnings" role="note"><strong>Aviso oficial:</strong> {p.notice}</p>}
@@ -383,7 +414,7 @@ function Details({ route, metadata, onPlan, elevation }: { route: RouteFeature; 
           {km(p.computedLengthKm)} <small>(calculada a partir del track)</small>
           {lengthMismatch(p) && <small className="mismatch">El track oficial no coincide con la distancia publicada (puede estar incompleto o incluir variantes).</small>}
         </dd>
-        <dt>Desnivel oficial</dt><dd>{p.elevationGainM === null ? 'No publicado' : `${p.elevationGainM} m`}</dd>
+        <dt>Desnivel oficial (diferencia de altitud)</dt><dd>{p.elevationGainM === null ? 'No publicado' : `${p.elevationGainM} m`}</dd>
         {elevation && (
           <>
             <dt>Desnivel calculado</dt><dd>{gainText(elevation.profile)} <small>(modelo digital del terreno {elevation.meta.source})</small></dd>

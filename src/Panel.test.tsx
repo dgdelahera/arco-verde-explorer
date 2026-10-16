@@ -9,7 +9,7 @@ import type { PoiFeature } from './pois'
 import { fixture } from './test/fixture'
 import { parseElevation, type ElevationData } from './elevation'
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear() })
 
 const data = parseRoutes(fixture)
 const long = 'Texto largo. '.repeat(40)
@@ -77,7 +77,7 @@ it('shows category as text, intro, landmarks and Spanish date', () => {
   expect(screen.getByRole('link', { name: 'Fuente oficial' })).toHaveAttribute('href', data.metadata!.sourceUrl)
   expect(screen.getByText('Filtros', { selector: 'summary' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Rutas' })).toBeInTheDocument()
-  expect(screen.getByText('Corta · Circular · desnivel 80 m · a 12,3 km')).toBeInTheDocument()
+  expect(screen.getByText('Corta · Circular · dif. altitud 80 m (oficial) · a 12,3 km')).toBeInTheDocument()
   expect(screen.getByText('Categoría', { selector: 'dt' })).toBeInTheDocument()
   expect(screen.getAllByText(/14 de octubre de 2026/)).toHaveLength(2)
   expect(screen.getByText('2 de 2 rutas')).toHaveAttribute('aria-live', 'polite')
@@ -262,7 +262,7 @@ it('shows planner metrics, labels and controls', async () => {
   expect(section.getByText(/Desnivel estimado/)).toHaveTextContent('Desnivel estimado: calculando…')
   expect(await section.findByText(/no se pudo consultar el modelo del terreno/, undefined, { timeout: 2000 })).toHaveTextContent('Desnivel estimado: no disponible')
   expect(section.getByText(/Duración estimada: 15 min/)).toHaveTextContent('a 4 km/h')
-  expect(section.getByRole('note')).toHaveTextContent('Trazado manual — no es una ruta validada; puede cruzar fincas, carreteras o zonas no transitables.')
+  expect(section.getByRole('note')).toHaveTextContent('Trazado manual — no es una ruta validada. Los puntos se ajustan a los caminos oficiales, pero entre un punto y otro se traza una línea recta')
   expect(section.getByRole('button', { name: 'Deshacer' })).toBeDisabled()
   fireEvent.click(section.getByRole('button', { name: 'Borrar' }))
   fireEvent.click(section.getByRole('button', { name: 'Salir' }))
@@ -313,7 +313,7 @@ it('shows the computed profile and gain apart from the official desnivel, with s
   })
   const { rerender } = render(<Harness elevation={elevation} />)
   const details = within(screen.getByRole('article', { name: /Camino de Alcobendas/ }))
-  expect(details.getByText('Desnivel oficial').nextElementSibling).toHaveTextContent('250 m')
+  expect(details.getByText('Desnivel oficial (diferencia de altitud)').nextElementSibling).toHaveTextContent('250 m')
   expect(details.getByText('Desnivel calculado').nextElementSibling).toHaveTextContent('+210 m / −180 m (modelo digital del terreno MDT25 del Instituto Geográfico Nacional (PNOA-LiDAR))')
   expect(details.getByText('Altitud calculada').nextElementSibling).toHaveTextContent('640 m – 760 m')
   const profile = details.getByRole('img', { name: /Perfil de elevación calculado: altitud entre 640 m y 760 m a lo largo de 17,6 km; desnivel \+210 m \/ −180 m/ })
@@ -324,4 +324,100 @@ it('shows the computed profile and gain apart from the official desnivel, with s
   rerender(<Harness elevation={null} />)
   expect(screen.queryByText('Desnivel calculado')).not.toBeInTheDocument()
   expect(screen.getByText(/no se muestra perfil de elevación/)).toBeInTheDocument()
+})
+
+const planner = (extra: Partial<Planner> = {}): Planner => ({ points: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn(), ...extra })
+
+it('labels the official figure as an altitude difference in the filter', () => {
+  render(<Harness />)
+  expect(screen.getByLabelText('Dif. altitud máx. (m, oficial)')).toBeInTheDocument()
+})
+
+it('hides Crear ruta while planning and moves focus into and out of the planner', () => {
+  const { rerender } = render(<Harness selectedId={null} />)
+  rerender(<Harness selectedId={null} planner={planner()} />)
+  expect(screen.queryByRole('button', { name: 'Crear ruta' })).toBeNull()
+  expect(screen.getByRole('heading', { name: 'Crear ruta' })).toHaveFocus()
+  rerender(<Harness selectedId={null} />)
+  expect(screen.getByRole('button', { name: 'Crear ruta' })).toHaveFocus()
+})
+
+it('asks before a route seed replaces a saved draft', () => {
+  const onPlan = vi.fn()
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  localStorage.setItem('arco-verde-plan', '#plan=40.5,-3.9;40.51,-3.89')
+  render(<Harness onPlan={onPlan} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Empezar desde esta ruta' }))
+  expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/trazado guardado de 2 puntos/))
+  expect(onPlan).not.toHaveBeenCalled()
+  confirm.mockReturnValue(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Empezar desde esta ruta' }))
+  expect(onPlan).toHaveBeenCalledWith([[-3.7, 40.6]])
+})
+
+it('marks external links as unavailable offline', () => {
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  render(<Harness />)
+  for (const name of ['Cómo llegar al inicio', 'Volver desde el final', 'Plano (PDF)']) {
+    const link = screen.getByRole('link', { name: `${name} (requiere conexión)` })
+    expect(link).toHaveAttribute('aria-disabled', 'true')
+    expect(link).not.toHaveAttribute('href')
+  }
+  expect(screen.getByText(/El mapa base puede estar incompleto/)).toBeInTheDocument()
+})
+
+it('collapses the expanded sheet before adding the centre point', () => {
+  const p = planner()
+  render(<Harness selectedId={null} planner={p} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Ampliar panel' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Añadir punto en el centro del mapa' }))
+  expect(p.addCenter).toHaveBeenCalledOnce()
+  expect(screen.getByRole('button', { name: 'Ampliar panel' })).toHaveAttribute('aria-pressed', 'false')
+})
+
+it('announces the plan in one debounced status and covers keyboard users in the instructions', () => {
+  vi.useFakeTimers()
+  const p = planner({ points: [[-3.7038, 40.4168]] })
+  const { rerender } = render(<Harness selectedId={null} planner={p} />)
+  const region = screen.getAllByRole('status').find((el) => el.classList.contains('visually-hidden'))!
+  rerender(<Harness selectedId={null} planner={{ ...p, points: [[-3.7038, 40.4168], [-3.6921, 40.4193]] }} />)
+  act(() => { vi.advanceTimersByTime(900) })
+  expect(region).toBeEmptyDOMElement()
+  act(() => { vi.advanceTimersByTime(100) })
+  expect(region).toHaveTextContent('2 puntos, 1 km')
+  expect(screen.getByText(/Distancia: 1 km/).closest('p')).not.toHaveAttribute('aria-live')
+  expect(screen.getByText(/Toca o haz clic en el mapa, o usa «Añadir punto en el centro del mapa»/)).toBeInTheDocument()
+  vi.useRealTimers()
+})
+
+it('retries the planner elevation when the browser comes back online', async () => {
+  const fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+  vi.stubGlobal('fetch', fetch)
+  render(<Harness selectedId={null} planner={planner({ points: [[-3.7038, 40.4168], [-3.6921, 40.4193]] })} />)
+  await screen.findByText(/no se pudo consultar el modelo del terreno/, undefined, { timeout: 2000 })
+  const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  act(() => { dispatchEvent(new Event('offline')) })
+  await act(() => new Promise((r) => setTimeout(r, 900)))
+  const offlineCalls = fetch.mock.calls.length
+  onLine.mockReturnValue(true)
+  act(() => { dispatchEvent(new Event('online')) })
+  await act(() => new Promise((r) => setTimeout(r, 900)))
+  expect(fetch.mock.calls.length).toBeGreaterThan(offlineCalls)
+})
+
+it('shows why a point off the network was rejected', () => {
+  const msg = 'Solo se pueden añadir puntos sobre los caminos de Arco Verde (a menos de 300 m)'
+  render(<Harness selectedId={null} planner={planner({ message: msg })} />)
+  expect(screen.getAllByRole('status').find((el) => el.textContent === msg)).toBeDefined()
+  expect(screen.getByText(/se ajusta al camino oficial más cercano/)).toBeInTheDocument()
+})
+
+it('does not offer to replace a saved draft that is off the network', () => {
+  const onPlan = vi.fn()
+  const confirm = vi.spyOn(window, 'confirm')
+  localStorage.setItem('arco-verde-plan', '#plan=40.1,-3.2;40.2,-3.3')
+  render(<Harness onPlan={onPlan} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Empezar desde esta ruta' }))
+  expect(confirm).not.toHaveBeenCalled()
+  expect(onPlan).toHaveBeenCalledWith([[-3.7, 40.6]])
 })

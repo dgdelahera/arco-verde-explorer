@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { directionsUrls, distanceToGeometryMeters, routeEnds, toGpx, haversineMeters, lengthMeters, lines, minDistanceToLines } from './geo'
+import { directionsUrls, distanceToGeometryMeters, endMarkers, fitPadding, routeEnds, snapToNetwork, toGpx, haversineMeters, lengthMeters, lines, minDistanceToLines } from './geo'
 
 const line = (coordinates: number[][]): GeoJSON.LineString => ({ type: 'LineString', coordinates })
 const multi = (coordinates: number[][][]): GeoJSON.MultiLineString => ({ type: 'MultiLineString', coordinates })
@@ -53,6 +53,53 @@ describe('routeEnds', () => {
   it('is null without coordinates', () => {
     expect(routeEnds(multi([]))).toBeNull()
     expect(routeEnds(multi([[]]))).toBeNull()
+  })
+})
+
+describe('endMarkers', () => {
+  const closed = line([[-3.7, 40.4], [-3.71, 40.41], [-3.7001, 40.4]])
+  const open = line([[-3.7, 40.4], [-3.71, 40.41], [-3.7, 40.42]])
+  it('shares one marker only for loops that close within 200 m', () => {
+    expect(endMarkers(closed, 'Circular').map((m) => m.label)).toEqual(['Inicio y fin'])
+    expect(endMarkers(open, 'Circular')).toEqual([{ at: [-3.7, 40.4], label: 'Inicio' }, { at: [-3.7, 40.42], label: 'Fin' }])
+    expect(endMarkers(open, 'Ida y vuelta').map((m) => m.label)).toEqual(['Inicio', 'Fin'])
+  })
+  it('marks both ends of linear routes and only the start without a type', () => {
+    expect(endMarkers(closed, 'Lineal').map((m) => m.label)).toEqual(['Inicio', 'Fin'])
+    expect(endMarkers(open, null).map((m) => m.label)).toEqual(['Inicio'])
+    expect(endMarkers(multi([]), 'Lineal')).toEqual([])
+  })
+})
+
+describe('snapToNetwork', () => {
+  const a = line([[-3.7, 40.4], [-3.6, 40.4]])
+  const b = line([[-3.7, 40.41], [-3.6, 40.41]])
+  it('keeps points on a track and snaps nearby ones onto it', () => {
+    expect(snapToNetwork([-3.65, 40.4], [a])).toEqual([-3.65, 40.4])
+    const s = snapToNetwork([-3.65, 40.402], [a])!
+    expect(s[0]).toBeCloseTo(-3.65, 6)
+    expect(s[1]).toBeCloseTo(40.4, 6)
+  })
+  it('rejects points farther than the limit', () => {
+    expect(snapToNetwork([-3.65, 40.404], [a])).toBeNull()
+    expect(snapToNetwork([-3.65, 40.404], [a], 500)).not.toBeNull()
+    expect(snapToNetwork([-3.65, 40.4], [])).toBeNull()
+  })
+  it('picks the nearest of several tracks', () => {
+    expect(snapToNetwork([-3.65, 40.408], [a, b])![1]).toBeCloseTo(40.41, 6)
+    expect(snapToNetwork([-3.65, 40.402], [b, a])![1]).toBeCloseTo(40.4, 6)
+  })
+})
+
+describe('fitPadding', () => {
+  it('clears the controls and the sheet when there is room', () => {
+    expect(fitPadding(1000, 800, [60, 100], 0)).toEqual({ tl: [84, 48], br: [24, 24] })
+    expect(fitPadding(390, 844, [150, 160], 380)).toEqual({ tl: [24, 208], br: [24, 404] })
+  })
+  it('caps the sheet so at least 120 px of map stay usable, even behind an expanded sheet', () => {
+    const { tl, br } = fitPadding(390, 844, [150, 160], 776)
+    expect(844 - tl[1] - br[1]).toBe(120)
+    expect(fitPadding(390, 150, [150, 160], 776).br).toEqual([24, 24])
   })
 })
 

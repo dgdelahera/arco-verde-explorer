@@ -1,12 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Control, divIcon, DomEvent, latLng, latLngBounds, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
+import { Control, divIcon, DomEvent, latLng, latLngBounds, point, popup, tooltip, type LatLngBounds, type LatLngTuple, type Map as LeafletMap } from 'leaflet'
 import { AttributionControl, CircleMarker, MapContainer, Marker, Pane, Popup, Polyline, TileLayer, Tooltip, useMap, ZoomControl } from 'react-leaflet'
 import { emptyFilters, filterRoutes, norm, parseRoutes, routeIdFromHash, type RouteFeature, type RoutesData } from './filters'
-import { distanceToGeometryMeters, lines, minDistanceToLines, routeEnds, type Position } from './geo'
+import { distanceToGeometryMeters, endMarkers, fitPadding, lines, minDistanceToLines, snapToNetwork, type Position } from './geo'
 import { useOnline } from './online'
 import { Panel, type LocateStatus } from './Panel'
-import { decodePlan, loadDraft, MAX_POINTS, round5, saveDraft } from './plan'
+import { decodePlan, onNetwork, openableDraft, MAX_POINTS, planHash, round5, saveDraft } from './plan'
 import { osmUrl, parsePois, POI_CATEGORIES, searchPois, type PoiCategory, type PoiFeature, type PoisData } from './pois'
 import { parseElevation, type ElevationData } from './elevation'
 
@@ -31,21 +31,12 @@ function Endpoint({ at, label, color }: { at: Position; label: string; color: st
 }
 
 function Endpoints({ route }: { route: RouteFeature }) {
-  const ends = routeEnds(route.geometry)
-  const type = route.properties.type
-  if (!ends) return null
-  if (type !== 'Lineal') return <Endpoint at={ends.start} label={type === 'Circular' || type === 'Ida y vuelta' ? 'Inicio y fin' : 'Inicio'} color="#1a7f37" />
-  return (
-    <>
-      <Endpoint at={ends.start} label="Inicio" color="#1a7f37" />
-      <Endpoint at={ends.end} label="Fin" color="#b42318" />
-    </>
-  )
+  return endMarkers(route.geometry, route.properties.type).map((m) => <Endpoint key={m.label} at={m.at} label={m.label} color={m.label === 'Fin' ? '#b42318' : '#1a7f37'} />)
 }
 
 const RouteLine = memo(function RouteLine({ positions, mode, casing }: LineProps) {
   const weight = mode === 'selected' ? 7 : mode === 'dimmed' ? 3 : 4
-  const opacity = mode === 'dimmed' ? 0.4 : 1
+  const opacity = mode === 'dimmed' && !casing ? 0.7 : 1
   const pathOptions = useMemo(
     () => ({ color: casing ? '#fff' : mode === 'selected' ? SELECTED : NETWORK, weight: casing ? weight + 3 : weight, opacity, interactive: false }),
     [casing, mode, weight, opacity],
@@ -65,6 +56,15 @@ function MapSetup({ network }: { network?: LatLngBounds }) {
     map.on('resize', limit)
     return () => { map.off('resize', limit) }
   }, [map, network])
+  useEffect(() => {
+    const label = (e: L.PopupEvent) => {
+      const close = e.popup.getElement()?.querySelector('.leaflet-popup-close-button')
+      close?.setAttribute('aria-label', 'Cerrar')
+      close?.setAttribute('title', 'Cerrar')
+    }
+    map.on('popupopen', label)
+    return () => { map.off('popupopen', label) }
+  }, [map])
   return null
 }
 
@@ -84,10 +84,10 @@ function fit(map: LeafletMap, bounds: LatLngBounds) {
   const sheet = media('(max-width: 767px)') ? (document.querySelector<HTMLElement>('.panel')?.offsetHeight ?? 0) : 0
   const box = map.getContainer().getBoundingClientRect()
   const ctl = map.getContainer().querySelector('.leaflet-top.leaflet-left')!.getBoundingClientRect()
-  const [w, h] = [ctl.right - box.left, ctl.bottom - box.top]
-  // Padding is a rectangle, so clear the corner controls along whichever side costs less of the visible map.
-  const [left, top] = w / box.width < h / (box.height - sheet) ? [w, 0] : [0, h]
-  map.fitBounds(bounds, { paddingTopLeft: [24 + left, 48 + top], paddingBottomRight: [24, 24 + sheet], animate: !media('(prefers-reduced-motion: reduce)') })
+  const { tl, br } = fitPadding(box.width, box.height, [ctl.right - box.left, ctl.bottom - box.top], sheet)
+  const animate = !media('(prefers-reduced-motion: reduce)')
+  if (!Number.isFinite(map.getBoundsZoom(bounds, false, point(tl).add(br)))) return void map.fitBounds(bounds, { animate })
+  map.fitBounds(bounds, { paddingTopLeft: tl, paddingBottomRight: br, animate })
 }
 
 function FitBounds({ bounds, nonce }: { bounds: LatLngBounds; nonce: number }) {
@@ -97,10 +97,10 @@ function FitBounds({ bounds, nonce }: { bounds: LatLngBounds; nonce: number }) {
 }
 
 const poiIcons = Object.fromEntries(Object.entries(POI_CATEGORIES).map(([k, c]) => [k, divIcon({
-  className: 'poi-pin', html: `<span style="background:${c.color}">${c.letter}</span>`, iconSize: [24, 24],
+  className: 'poi-pin', html: `<span aria-hidden="true" style="background:${c.color}">${c.letter}</span>`, iconSize: [24, 24],
 })]))
 
-function PoiLayer({ pois, focus }: { pois: PoiFeature[]; focus: { id: string } | null }) {
+function PoiLayer({ pois, focus, onFocused }: { pois: PoiFeature[]; focus: { id: string } | null; onFocused: () => void }) {
   const map = useMap()
   const markers = useRef(new Map<string, L.Marker>())
   useEffect(() => {
@@ -108,7 +108,8 @@ function PoiLayer({ pois, focus }: { pois: PoiFeature[]; focus: { id: string } |
     if (!m) return
     fit(map, m.getLatLng().toBounds(400))
     m.openPopup()
-  }, [map, focus, pois])
+    onFocused()
+  }, [map, focus, pois, onFocused])
   return (
     <Pane name="pois" style={{ zIndex: 435 }}>
       {pois.map((f) => {
@@ -119,7 +120,8 @@ function PoiLayer({ pois, focus }: { pois: PoiFeature[]; focus: { id: string } |
             ref={(m) => { if (m) markers.current.set(p.id, m); else markers.current.delete(p.id) }}>
             <Popup>
               <strong>{p.name ?? c.one}</strong><br />
-              {c.one}<br />
+              {p.name && <>{c.one}<br /></>}
+              <small>OpenStreetMap, sin verificar{p.category === 'fuente' && ': puede estar seca o cerrada'}</small><br />
               <a href={osmUrl(p.id)} target="_blank" rel="noopener noreferrer">Ver en OpenStreetMap</a>
             </Popup>
           </Marker>
@@ -178,9 +180,6 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
       el.addEventListener('focusin', () => { focusInside = true })
       el.addEventListener('focusout', (ev) => { focusInside = el.contains(ev.relatedTarget as Node | null) })
       pop.on('remove', () => { if (focusInside) map.getContainer().focus({ preventScroll: true }) })
-      const close = pop.getElement()?.querySelector('.leaflet-popup-close-button')
-      close?.setAttribute('aria-label', 'Cerrar')
-      close?.setAttribute('title', 'Cerrar')
       box.querySelector('button')?.focus()
     }
     let last: L.LeafletMouseEvent
@@ -214,27 +213,46 @@ function Picking({ visible, geoms, onSelect }: { visible: RouteFeature[]; geoms:
 }
 
 type Edit = (f: (points: Position[]) => Position[]) => void
-const pin = (n: number) => divIcon({ className: 'plan-pin', html: String(n), iconSize: [32, 32] })
+type Snap = (ll: { lat: number; lng: number }) => Position | null
+const focus = (el: HTMLElement | null) => el?.focus()
+const pin = (n: number) => divIcon({ className: 'plan-pin', html: `<span aria-hidden="true">${n}</span>`, iconSize: [32, 32] })
 
-function PlanLayer({ points, edit }: { points: Position[]; edit: Edit }) {
+function PlanLayer({ points, edit, snap }: { points: Position[]; edit: Edit; snap: Snap }) {
   const map = useMap()
   const dragEnd = useRef(0)
   useEffect(() => {
     // The mouseup ending a marker drag can also reach the map as a click.
-    const onClick = (e: L.LeafletMouseEvent) => Date.now() - dragEnd.current > 300 && edit((p) => [...p, [round5(e.latlng.lng), round5(e.latlng.lat)]])
+    const onClick = (e: L.LeafletMouseEvent) => {
+      if (Date.now() - dragEnd.current < 300) return
+      const at = snap(e.latlng)
+      if (at) edit((p) => [...p, at])
+    }
     map.on('click', onClick)
     map.doubleClickZoom.disable()
     map.getContainer().style.cursor = 'crosshair'
     return () => { map.off('click', onClick); map.doubleClickZoom.enable(); map.getContainer().style.cursor = '' }
-  }, [map, edit])
+  }, [map, edit, snap])
   return (
     <Pane name="plan" style={{ zIndex: 440 }}>
       <Polyline positions={points.map(([lon, lat]): LatLngTuple => [lat, lon])} pathOptions={{ color: PLAN, weight: 4, dashArray: '8 6', interactive: false }} />
       {points.map(([lon, lat], i) => (
-        <Marker key={i} position={[lat, lon]} icon={pin(i + 1)} draggable title={`Punto ${i + 1}: arrástralo para moverlo o púlsalo para eliminarlo`} eventHandlers={{
-          dragend: (e) => { dragEnd.current = Date.now(); const ll = e.target.getLatLng(); edit((p) => p.map((q, j) => (j === i ? [round5(ll.lng), round5(ll.lat)] : q))) },
+        <Marker key={i} position={[lat, lon]} icon={pin(i + 1)} draggable title={`Punto ${i + 1}: púlsalo (o Intro) para eliminarlo; arrástralo para moverlo`} eventHandlers={{
+          dragend: (e) => {
+            dragEnd.current = Date.now()
+            const at = snap(e.target.getLatLng())
+            e.target.setLatLng(at ? [at[1], at[0]] : [lat, lon])
+            if (at) edit((p) => p.map((q, j) => (j === i ? at : q)))
+          },
         }}>
-          <Popup><button type="button" onClick={() => { map.closePopup(); edit((p) => p.filter((_, j) => j !== i)) }}>Eliminar punto {i + 1}</button></Popup>
+          <Popup>
+            <button type="button" ref={focus} onClick={(e) => {
+              // Closing the popup detaches this button, so Leaflet would no longer see the click as inside a popup and add a point.
+              e.stopPropagation()
+              map.closePopup()
+              edit((p) => p.filter((_, j) => j !== i))
+              map.getContainer().focus({ preventScroll: true })
+            }}>Eliminar punto {i + 1}</button>
+          </Popup>
         </Marker>
       ))}
     </Pane>
@@ -251,15 +269,15 @@ export default function App() {
   const [me, setMe] = useState<[number, number] | null>(null)
   const [locateStatus, setLocateStatus] = useState<LocateStatus>('idle')
   const [nearMe, setNearMe] = useState(false)
-  const [plan, setPlan] = useState<{ points: Position[]; past: Position[][]; edited?: boolean } | null>(null)
+  const [plan, setPlan] = useState<{ points: Position[]; past: Position[][]; edited?: boolean; link?: boolean } | null>(null)
   const [planView, setPlanView] = useState<LatLngBounds | null>(null)
   const mapRef = useRef<LeafletMap>(null)
   const online = useOnline()
   const [poiCats, setPoiCats] = useState<Set<PoiCategory>>(new Set())
   const [pois, setPois] = useState<PoisData | 'idle' | 'loading' | 'error'>('idle')
   const [poiFocus, setPoiFocus] = useState<{ id: string } | null>(null)
-  const loadPois = () => {
-    if (pois !== 'idle' && pois !== 'error') return
+  const loadPois = useCallback((retry = false) => {
+    if (pois !== 'idle' && !(pois === 'error' && retry)) return
     setPois('loading')
     fetch('/data/pois.geojson')
       .then((res) => {
@@ -268,14 +286,21 @@ export default function App() {
       })
       .then((json) => setPois(parsePois(json)))
       .catch(() => setPois('error'))
-  }
+  }, [pois])
+  useEffect(() => {
+    if (pois !== 'error') return
+    const retry = () => loadPois(true)
+    addEventListener('online', retry)
+    return () => removeEventListener('online', retry)
+  }, [pois, loadPois])
   const poiData = typeof pois === 'object' ? pois : null
   const poiMatches = useMemo(() => (poiData ? searchPois(poiData.pois, filters.q) : []), [poiData, filters.q])
   const shownPois = useMemo(() => poiData?.pois.filter((f) => poiCats.has(f.properties.category)) ?? [], [poiData, poiCats])
   const togglePoi = (c: PoiCategory) => {
-    if (!poiCats.has(c)) loadPois()
+    if (!poiCats.has(c)) loadPois(true)
     setPoiCats((s) => { const n = new Set(s); if (!n.delete(c)) n.add(c); return n })
   }
+  const clearPoiFocus = useCallback(() => setPoiFocus(null), [])
   const focusPoi = (f: PoiFeature) => {
     setPoiCats((s) => new Set(s).add(f.properties.category))
     setPoiFocus({ id: f.properties.id })
@@ -295,35 +320,58 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  const startPlan = useCallback((seed?: Position[]) => {
-    const draft = loadDraft()
-    const points = seed ?? draft
-    setPlan({ points, past: seed && draft.length ? [draft] : [] })
+  const tracks = useMemo(() => data?.routes.map((r) => r.geometry) ?? [], [data])
+  const [planMsg, setPlanMsg] = useState('')
+  const [notice, setNotice] = useState('')
+  const snap = useCallback<Snap>((ll) => {
+    const at = snapToNetwork([ll.lng, ll.lat], tracks)
+    setPlanMsg(at ? '' : 'Solo se pueden añadir puntos sobre los caminos de Arco Verde (a menos de 300 m)')
+    return at && [round5(at[0]), round5(at[1])]
+  }, [tracks])
+
+  // Plans opened from a link live in the URL; only plans the user started go to the saved draft.
+  const startPlan = useCallback((seed?: Position[], link = false) => {
+    const draft = link ? [] : openableDraft(tracks)
+    if (!draft && !window.confirm('Tu borrador guardado tiene puntos fuera de los caminos de Arco Verde y no se puede abrir. ¿Descartarlo y empezar uno nuevo?')) return
+    const points = seed ?? draft ?? []
+    setPlanMsg('')
+    setNotice('')
+    setPlan({ points, past: seed && draft?.length ? [draft] : [], link })
     setPlanView(points.length ? latLng(points[0][1], points[0][0]).toBounds(2000).extend(latLngBounds(points.map(([lon, lat]) => [lat, lon])).pad(0.25)) : null)
-  }, [])
+  }, [tracks])
   const editPlan = useCallback<Edit>((f) => setPlan((p) => {
     if (!p) return p
     const points = f(p.points)
-    return points.length > MAX_POINTS ? p : { points, past: [...p.past, p.points], edited: true }
+    return points.length > MAX_POINTS ? p : { ...p, points, past: [...p.past, p.points], edited: true }
   }), [])
-  useEffect(() => { if (plan?.edited) saveDraft(plan.points) }, [plan])
+  useEffect(() => {
+    if (!plan?.edited) return
+    if (plan.link) history.replaceState(null, '', planHash(plan.points))
+    else saveDraft(plan.points)
+  }, [plan])
 
   useEffect(() => {
     if (!data) return
     const ids = data.routes.map((r) => r.properties.id)
     const onHash = () => {
       const points = decodePlan(location.hash)
-      if (!points) return setSelectedId(routeIdFromHash(location.hash, ids))
-      history.replaceState(null, '', location.pathname + location.search)
-      startPlan(points)
+      if (points && onNetwork(points, tracks)) return startPlan(points, true)
+      setPlan(null)
+      setPlanView(null)
+      if (points) {
+        setNotice('El trazado del enlace tiene puntos fuera de los caminos de Arco Verde y no se puede abrir')
+        history.replaceState(null, '', location.pathname + location.search)
+      }
+      setSelectedId(routeIdFromHash(location.hash, ids))
     }
     onHash()
     addEventListener('hashchange', onHash)
     return () => removeEventListener('hashchange', onHash)
-  }, [data, startPlan])
+  }, [data, tracks, startPlan])
 
   const select = useCallback((id: string | null) => {
     setSelectedId(id)
+    setPlanView(null)
     if (id) location.hash = id
     else if (location.hash) history.pushState(null, '', location.pathname + location.search)
   }, [])
@@ -370,7 +418,7 @@ export default function App() {
     if (!navigator.geolocation) return setLocateStatus('unsupported')
     setLocateStatus('loading')
     navigator.geolocation.getCurrentPosition(
-      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('done'); setNearMe(true); setFitNonce((n) => n + 1) },
+      (p) => { setMe([p.coords.longitude, p.coords.latitude]); setLocateStatus('done'); setNearMe(true); setPlanView(null); setFitNonce((n) => n + 1) },
       (e) => setLocateStatus(e.code === e.PERMISSION_DENIED ? 'denied' : 'error'),
       { timeout: 15000 },
     )
@@ -405,18 +453,25 @@ export default function App() {
         planner={plan && {
           points: plan.points,
           canUndo: plan.past.length > 0,
-          undo: () => setPlan({ points: plan.past.at(-1)!, past: plan.past.slice(0, -1), edited: true }),
+          undo: () => setPlan({ ...plan, points: plan.past.at(-1)!, past: plan.past.slice(0, -1), edited: true }),
           clear: () => editPlan(() => []),
           addCenter: () => {
             const map = mapRef.current!
             const box = map.getContainer().getBoundingClientRect()
             const x = document.querySelector('.crosshair')!.getBoundingClientRect()
             const ll = map.containerPointToLatLng([x.left + x.width / 2 - box.left, x.top + x.height / 2 - box.top])
-            editPlan((p) => [...p, [round5(ll.lng), round5(ll.lat)]])
+            const at = snap(ll)
+            if (at) editPlan((p) => [...p, at])
           },
-          exit: () => { setPlan(null); setPlanView(null) },
+          message: planMsg,
+          exit: () => {
+            setPlan(null)
+            setPlanView(null)
+            if (plan.link) history.replaceState(null, '', location.pathname + location.search)
+          },
         }}
         onPlan={startPlan}
+        notice={notice}
         pois={{ active: poiCats, toggle: togglePoi, status: typeof pois === 'object' ? 'ready' : pois, metadata: poiData?.metadata ?? null, matches: poiMatches, focus: focusPoi }}
         elevation={elevation}
       />
@@ -436,8 +491,8 @@ export default function App() {
               <CircleMarker center={[me[1], me[0]]} radius={8} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a56db', fillOpacity: 1, interactive: false }} />
             </Pane>
           )}
-          {!plan && <PoiLayer pois={shownPois} focus={poiFocus} />}
-          {plan ? <PlanLayer points={plan.points} edit={editPlan} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
+          {!plan && <PoiLayer pois={shownPois} focus={poiFocus} onFocused={clearPoiFocus} />}
+          {plan ? <PlanLayer points={plan.points} edit={editPlan} snap={snap} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
           <FitBounds bounds={bounds} nonce={fitNonce} />
         </MapContainer>
         {plan && <div className="crosshair" aria-hidden="true" />}

@@ -36,9 +36,10 @@ button:hover { background: #e8e8e8; }
 .status { padding: 2rem 1rem; max-width: 40rem; margin: 0 auto; font-size: 1.1rem; }
 .status[role='alert'] { color: #8a1c1c; }
 .offline {
-  position: fixed; top: 0.5rem; left: 50%; transform: translateX(-50%); z-index: 1100; margin: 0;
+  flex-basis: 100%; margin: 0;
   padding: 0.35rem 0.75rem; border: 1px solid var(--warn-border); border-radius: 6px; background: var(--warn-bg); font-size: 0.9rem;
 }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .offline:empty { display: none; }
 
 .layout { display: grid; grid-template-columns: 360px 1fr; height: 100dvh; }
@@ -79,6 +80,7 @@ button:hover { background: #e8e8e8; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
 .btn { display: inline-block; border: 1px solid var(--border); background: #f4f4f4; border-radius: 6px; padding: 0.35rem 0.6rem; color: var(--fg); text-decoration: none; }
 .btn:hover { background: #e8e8e8; }
+.btn[aria-disabled='true'] { opacity: 0.6; cursor: not-allowed; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #094a18; }
 .mismatch { display: block; color: #8a1c1c; }
@@ -143,6 +145,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   h1 { font-size: 1rem; }
   .intro { display: none; }
   .crosshair { top: 27.5dvh; }
+  .panel[data-open='false'] ~ .map .crosshair { top: 50%; }
 }
 
 @media (pointer: coarse) {

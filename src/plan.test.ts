@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decodePlan, MAX_POINTS, planHash, planMeters } from './plan'
+import { decodePlan, MAX_POINTS, onNetwork, planHash, planMeters } from './plan'
 
 describe('plan hash', () => {
   it('round-trips points rounded to 5 decimals in lat,lon order', () => {
@@ -28,5 +28,13 @@ describe('planMeters', () => {
     expect(planMeters([[-3.7038, 40.4168]])).toBe(0)
     const d = planMeters([[-3.7038, 40.4168], [-3.6921, 40.4193], [-3.7038, 40.4168]])
     expect(Math.abs(d - 2060)).toBeLessThan(40)
+  })
+})
+
+describe('onNetwork', () => {
+  const track: GeoJSON.LineString = { type: 'LineString', coordinates: [[-3.7, 40.4], [-3.6, 40.4]] }
+  it('accepts plan links whose points are all near the network and rejects any off it', () => {
+    expect(onNetwork(decodePlan('#plan=40.4,-3.65;40.401,-3.62')!, [track])).toBe(true)
+    expect(onNetwork(decodePlan('#plan=40.4,-3.65;40.45,-3.62')!, [track])).toBe(false)
   })
 })

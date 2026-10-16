@@ -14,7 +14,7 @@ it('shows the banner while offline and hides it when back online', () => {
   render(<OfflineBanner />)
   expect(screen.getByRole('status')).toBeEmptyDOMElement()
   go(false)
-  expect(screen.getByRole('status')).toHaveTextContent('Sin conexión: mostrando datos guardados')
+  expect(screen.getByRole('status')).toHaveTextContent('Sin conexión: mostrando datos guardados. El mapa base puede estar incompleto.')
   go(true)
   expect(screen.getByRole('status')).toBeEmptyDOMElement()
 })
