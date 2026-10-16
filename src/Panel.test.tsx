@@ -36,17 +36,37 @@ function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances 
 it('filters the list and reports selection', () => {
   const onSelect = vi.fn()
   render(<Harness onSelect={onSelect} />)
-  const list = screen.getByRole('list')
-  expect(list.querySelectorAll('li')).toHaveLength(2)
+  expect(screen.getAllByRole('listitem')).toHaveLength(2)
   expect(screen.getByText(/Cruce de carretera/)).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Plano (PDF)' })).toHaveAttribute('href', 'https://example.org/rl2.pdf')
 
   fireEvent.change(screen.getByLabelText('Municipio'), { target: { value: 'Las Rozas' } })
-  expect(list.querySelectorAll('li')).toHaveLength(1)
+  expect(screen.getAllByRole('listitem')).toHaveLength(1)
   expect(screen.getByText('1 de 2 rutas')).toBeInTheDocument()
 
   fireEvent.click(screen.getByRole('button', { name: /Senda del Arroyo/ }))
   expect(onSelect).toHaveBeenCalledWith('RC1')
+})
+
+it('groups routes under Rutas cortas and Rutas largas and hides an empty group', () => {
+  render(<Harness />)
+  const group = (name: RegExp) => screen.getByRole('heading', { level: 3, name }).closest('section')!
+  expect(within(group(/^Rutas cortas \(1\)$/)).getByRole('button', { name: /Senda del Arroyo/ })).toBeInTheDocument()
+  expect(within(group(/^Rutas largas \(1\)$/)).getByRole('button', { name: /Camino de Alcobendas/ })).toBeInTheDocument()
+  expect(screen.getByText('2 de 2 rutas')).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('Categoría'), { target: { value: 'corta' } })
+  expect(screen.getByRole('heading', { name: 'Rutas cortas (1)' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: /Rutas largas/ })).toBeNull()
+})
+
+it('renders Crear ruta as its own section before Rutas', () => {
+  render(<Harness />)
+  const heading = screen.getByRole('heading', { level: 2, name: 'Crear ruta' })
+  const section = within(heading.closest('section')!)
+  expect(section.getByText('Dibuja tu propio recorrido sobre los caminos de Arco Verde.')).toBeInTheDocument()
+  expect(section.getByRole('button', { name: 'Crear ruta' })).toBeInTheDocument()
+  expect(section.queryByRole('button', { name: 'Cerca de mí' })).toBeNull()
+  expect(heading.compareDocumentPosition(screen.getByRole('heading', { name: 'Rutas' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
 it('deselects when the selected item is pressed again', () => {
@@ -349,6 +369,7 @@ it('hides Crear ruta while planning and moves focus into and out of the planner'
   const { rerender } = render(<Harness selectedId={null} />)
   rerender(<Harness selectedId={null} planner={planner()} />)
   expect(screen.queryByRole('button', { name: 'Crear ruta' })).toBeNull()
+  expect(screen.queryByText('Dibuja tu propio recorrido sobre los caminos de Arco Verde.')).toBeNull()
   expect(screen.getByRole('heading', { name: 'Crear ruta' })).toHaveFocus()
   rerender(<Harness selectedId={null} />)
   expect(screen.getByRole('button', { name: 'Crear ruta' })).toHaveFocus()

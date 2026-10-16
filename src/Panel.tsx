@@ -17,6 +17,7 @@ const LOCATE_MESSAGES: Partial<Record<LocateStatus, string>> = {
   unsupported: 'Tu navegador no permite obtener la ubicación.',
 }
 const CATEGORY = { corta: 'Corta', larga: 'Larga' }
+const GROUPS = { corta: 'Rutas cortas', larga: 'Rutas largas' }
 const longDate = (iso: string) => {
   const d = new Date(`${iso}T00:00:00Z`)
   return Number.isNaN(d.getTime()) ? iso : new Intl.DateTimeFormat('es-ES', { dateStyle: 'long', timeZone: 'UTC' }).format(d)
@@ -219,10 +220,17 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
         <div className="nearby">
           <button type="button" onClick={() => locateStatus !== 'loading' && onLocate()} aria-disabled={locateStatus === 'loading'}>Cerca de mí</button>
-          {!planner && <button type="button" ref={createButton} onClick={() => onPlan()}>Crear ruta</button>}
           <p role="status" className="locate-msg" data-error={locateStatus !== 'idle' && locateStatus !== 'loading' && locateStatus !== 'done'}>{LOCATE_MESSAGES[locateStatus]}</p>
           <p role="status" className="locate-msg" data-error="true">{notice}</p>
         </div>
+
+        {!planner && (
+          <section>
+            <h2 className="section-title">Crear ruta</h2>
+            <p className="note">Dibuja tu propio recorrido sobre los caminos de Arco Verde.</p>
+            <button type="button" ref={createButton} onClick={() => onPlan()}>Crear ruta</button>
+          </section>
+        )}
 
         <h2 className="section-title" id="routes-heading" tabIndex={-1} ref={routesHeading}>Rutas</h2>
         <p className="count" aria-live="polite" aria-atomic="true">{visible.length} de {data.routes.length} rutas</p>
@@ -239,20 +247,28 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
           </div>
         )}
 
-        <ul className="route-list">
-          {visible.map((feature) => { const p = feature.properties; return (
-            <li key={p.id} id={`route-${p.id}`}>
-              <button type="button" className="route-item" aria-expanded={p.id === selectedId} onClick={() => onSelect(p.id === selectedId ? null : p.id)}>
-                <span className="route-id">{p.id}</span>
-                <span className="route-name">{p.name}
-                  <small className="route-meta">{summary(p)}{distances?.has(p.id) && ` · a ${km(distances.get(p.id)!)}`}</small>
-                </span>
-                <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
-              </button>
-              {p.id === selectedId && <Details route={feature} network={network} metadata={data.metadata} onPlan={onPlan} elevation={elevation?.routes[p.id] ? { meta: elevation.metadata, profile: elevation.routes[p.id] } : null} />}
-            </li>
-          )})}
-        </ul>
+        {(Object.keys(GROUPS) as (keyof typeof GROUPS)[]).map((c) => {
+          const routes = visible.filter((f) => f.properties.category === c)
+          return routes.length > 0 && (
+            <section key={c}>
+              <h3 className="section-title subsection">{GROUPS[c]} ({routes.length})</h3>
+              <ul className="route-list">
+                {routes.map((feature) => { const p = feature.properties; return (
+                <li key={p.id} id={`route-${p.id}`}>
+                  <button type="button" className="route-item" aria-expanded={p.id === selectedId} onClick={() => onSelect(p.id === selectedId ? null : p.id)}>
+                    <span className="route-id">{p.id}</span>
+                    <span className="route-name">{p.name}
+                      <small className="route-meta">{summary(p)}{distances?.has(p.id) && ` · a ${km(distances.get(p.id)!)}`}</small>
+                    </span>
+                    <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
+                  </button>
+                  {p.id === selectedId && <Details route={feature} network={network} metadata={data.metadata} onPlan={onPlan} elevation={elevation?.routes[p.id] ? { meta: elevation.metadata, profile: elevation.routes[p.id] } : null} />}
+                </li>
+                )})}
+              </ul>
+            </section>
+          )
+        })}
 
         <footer className="attribution">
           {data.metadata && (
