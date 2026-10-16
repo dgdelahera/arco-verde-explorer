@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { useState } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { act } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { emptyFilters, filterRoutes, parseRoutes } from './filters'
@@ -22,7 +22,7 @@ function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances 
   const [filters, setFilters] = useState(emptyFilters)
   return (
     <Panel data={d} visible={filterRoutes(d.routes, filters)} filters={filters} onFiltersChange={setFilters}
-      selectedId={selectedId} onSelect={onSelect} onShowAll={() => {}} distances={distances} locateStatus={locateStatus} onLocate={() => {}} />
+      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} />
   )
 }
 
@@ -74,8 +74,23 @@ it('shows category as text, intro, landmarks and Spanish date', () => {
   expect(screen.getByRole('heading', { name: 'Rutas' })).toBeInTheDocument()
   expect(screen.getByText('Corta · Circular · desnivel 80 m · a 12,3 km')).toBeInTheDocument()
   expect(screen.getByText('Categoría', { selector: 'dt' })).toBeInTheDocument()
-  expect(screen.getByText(/14 de octubre de 2026/)).toBeInTheDocument()
+  expect(screen.getAllByText(/14 de octubre de 2026/)).toHaveLength(2)
   expect(screen.getByText('2 de 2 rutas')).toHaveAttribute('aria-live', 'polite')
+})
+
+it('shows a map legend without the length colour code', () => {
+  render(<Harness />)
+  const legend = screen.getByText('Red oficial').closest('p')!
+  expect(legend).toHaveTextContent('Red oficial Ruta seleccionada Inicio / Fin')
+  expect(screen.queryByRole('button', { name: 'Ver todas' })).toBeNull()
+})
+
+it('shows the data source and extraction date in the ficha', () => {
+  render(<Harness />)
+  const note = screen.getByText(/^Datos oficiales:/, { selector: '.details p' })
+  expect(note).toHaveTextContent('extraídos el 14 de octubre de 2026')
+  expect(note).toHaveTextContent('La longitud calculada es un cálculo propio')
+  expect(within(note).getByRole('link', { name: 'Comunidad de Madrid' })).toHaveAttribute('href', data.metadata!.sourceUrl)
 })
 
 it('renders notice above precauciones, directions and the Strava hint', () => {
@@ -130,8 +145,7 @@ it('moves focus to the route list after clearing filters', () => {
 
 it('keeps Cerca de mí focusable while locating and ignores clicks', () => {
   const onLocate = vi.fn()
-  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}}
-    onShowAll={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} />)
+  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} />)
   const btn = screen.getByRole('button', { name: 'Cerca de mí' })
   expect(btn).not.toBeDisabled()
   expect(btn).toHaveAttribute('aria-disabled', 'true')
