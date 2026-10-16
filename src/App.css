@@ -120,6 +120,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .crosshair { position: absolute; left: 50%; top: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; z-index: 500; pointer-events: none; background: linear-gradient(#e66100, #e66100) center / 2px 100% no-repeat, linear-gradient(#e66100, #e66100) center / 100% 2px no-repeat; filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff); }
 .plan-pin { display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #e66100; border: 3px solid #fff; color: #fff; font-weight: 700; font-size: 0.8rem; box-shadow: 0 1px 4px rgb(0 0 0 / 0.4); }
 
+.profile { display: block; width: 100%; max-width: 28rem; height: auto; margin: 0.25rem 0; font-size: 11px; fill: var(--muted); }
+.profile-area { fill: var(--accent); fill-opacity: 0.15; stroke: none; }
+.profile-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.profile-axis { stroke: var(--border); stroke-width: 1; }
+
 .attribution { margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
 .attribution p { margin: 0.25rem 0; }
 

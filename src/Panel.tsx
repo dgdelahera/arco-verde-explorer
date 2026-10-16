@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { distinct, emptyFilters, lengthMismatch, type Filters, type Metadata, type RouteFeature, type RoutesData } from './filters'
 import { directionsUrls, routeEnds, toGpx, type Position } from './geo'
 import { MAX_POINTS, planHash, planLine, planMeters } from './plan'
 import { POI_CATEGORIES, type PoiCategory, type PoiFeature } from './pois'
+import { buildProfile, lookupElevations, sampleLines, tileKey, type ElevationData, type ElevationMeta, type Grid, type Profile } from './elevation'
 
 export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
 const LOCATE_MESSAGES: Partial<Record<LocateStatus, string>> = {
@@ -85,9 +86,10 @@ type Props = {
   planner: Planner | null
   onPlan: (seed?: Position[]) => void
   pois: PoiPanel
+  elevation?: ElevationData | null
 }
 
-export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan, pois }: Props) {
+export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan, pois, elevation = null }: Props) {
   const [open, setOpen] = useState(true)
   const [full, setFull] = useState(false)
   const props = data.routes.map((r) => r.properties)
@@ -233,7 +235,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
                 </span>
                 <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
               </button>
-              {p.id === selectedId && <Details route={feature} metadata={data.metadata} onPlan={onPlan} />}
+              {p.id === selectedId && <Details route={feature} metadata={data.metadata} onPlan={onPlan} elevation={elevation?.routes[p.id] ? { meta: elevation.metadata, profile: elevation.routes[p.id] } : null} />}
             </li>
           )})}
         </ul>
@@ -257,10 +259,70 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 }
 
 const pageUrl = (hash: string) => `${location.href.split('#')[0]}${hash}`
+const meters = (n: number) => `${n.toLocaleString('es-ES')} m`
+const gainText = (p: Pick<Profile, 'gainM' | 'lossM'>) => `+${meters(p.gainM)} / −${meters(p.lossM)}`
+
+function ElevationProfile({ data: { profile, minM, maxM, gainM, lossM }, label }: { data: Profile; label: string }) {
+  const W = 320, H = 130, L = 44, R = 8, T = 10, B = 104
+  const total = profile.at(-1)![0]
+  const span = Math.max(maxM - minM, 50)
+  const lo = (minM + maxM - span) / 2
+  const x = (d: number) => L + (total ? d / total : 0) * (W - L - R)
+  const y = (e: number) => B - ((e - lo) / span) * (B - T)
+  const line = profile.map(([d, e]) => `${x(d).toFixed(1)},${y(e).toFixed(1)}`).join(' ')
+  return (
+    <svg className="profile" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${label}: altitud entre ${meters(minM)} y ${meters(maxM)} a lo largo de ${km(total)}; desnivel ${gainText({ gainM, lossM })}`}>
+      <polygon points={`${x(0)},${B} ${line} ${x(total)},${B}`} className="profile-area" />
+      <polyline points={line} className="profile-line" />
+      <line x1={L} y1={B} x2={W - R} y2={B} className="profile-axis" />
+      <line x1={L} y1={T} x2={L} y2={B} className="profile-axis" />
+      <text x={L - 4} y={y(maxM) + 4} textAnchor="end">{meters(maxM)}</text>
+      <text x={L - 4} y={y(minM) + 4} textAnchor="end">{meters(minM)}</text>
+      <text x={L} y={H - 8} textAnchor="start">0 km</text>
+      <text x={W - R} y={H - 8} textAnchor="end">{km(total)}</text>
+    </svg>
+  )
+}
+
+function ElevationNote({ meta }: { meta: ElevationMeta }) {
+  return (
+    <p className="note">
+      Los tracks oficiales no incluyen altitud. Perfil y desnivel son un cálculo propio con el <a href={meta.sourceUrl} target="_blank" rel="noopener noreferrer">{meta.source}</a> (malla
+      de {meta.resolutionM} m, muestras cada {meta.sampleSpacingM} m, {meta.smoothing}), consultado el {longDate(meta.retrievedAt)}; {meta.attribution}, <a href={meta.licenceUrl} target="_blank" rel="noopener noreferrer">{meta.licence}</a>.
+      Es aproximado: el modelo no recoge puentes ni pasos inferiores y el resultado depende del suavizado.
+    </p>
+  )
+}
+
+const PLAN_MAX_TILES = 4
+const planTiles = new Map<string, Grid>()
+type PlanElevation = { key: string; profile: Profile | null; reason?: string }
+
+function usePlanElevation(points: Position[]): PlanElevation | null {
+  const key = planHash(points)
+  const samples = useMemo(() => sampleLines([points]), [points])
+  const tooLarge = new Set(samples.map((s) => tileKey(s.p))).size > PLAN_MAX_TILES
+  const [result, setResult] = useState<PlanElevation | null>(null)
+  useEffect(() => {
+    if (samples.length < 2 || tooLarge) return
+    const ctrl = new AbortController()
+    const get = (url: string) => fetch(url, { signal: ctrl.signal }).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
+    const timer = setTimeout(() => {
+      lookupElevations(samples.map((s) => s.p), get, planTiles)
+        .then((z) => setResult({ key, profile: buildProfile(samples, z) }))
+        .catch(() => { if (!ctrl.signal.aborted) setResult({ key, profile: null, reason: 'no se pudo consultar el modelo del terreno' }) })
+    }, 800)
+    return () => { clearTimeout(timer); ctrl.abort() }
+  }, [samples, tooLarge, key])
+  if (samples.length < 2) return { key, profile: null }
+  if (tooLarge) return { key, profile: null, reason: 'trazado demasiado extenso para calcularlo en el navegador' }
+  return result?.key === key ? result : null
+}
 
 function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCenter } }: { planner: Planner }) {
   const [shareMsg, share] = useShare()
   const m = planMeters(points)
+  const ele = usePlanElevation(points)
   return (
     <section className="planner" aria-labelledby="planner-heading">
       <h2 className="section-title" id="planner-heading">Crear ruta</h2>
@@ -275,14 +337,24 @@ function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCent
         <span role="status" className="note">{shareMsg}</span>
       </div>
       <p aria-live="polite"><strong>Distancia: {km(m / 1000)}</strong> · {points.length} {points.length === 1 ? 'punto' : 'puntos'}{points.length >= MAX_POINTS && ` (máximo ${MAX_POINTS})`}</p>
-      <p>Desnivel: no disponible (sin datos de altitud)</p>
+      <p aria-live="polite">
+        {points.length > 1 && <>
+          Desnivel estimado:{' '}
+          {!ele ? 'calculando…'
+            : ele.profile ? <>{gainText(ele.profile)} <small>(altitud {meters(ele.profile.minM)}–{meters(ele.profile.maxM)}, modelo digital del terreno MDT25 © IGN, CC BY 4.0, consultado al dibujar)</small></>
+            : `no disponible${ele.reason ? ` (${ele.reason})` : ''}`}
+        </>}
+      </p>
+      {ele?.profile && <ElevationProfile data={ele.profile} label="Perfil de elevación estimado" />}
       {points.length > 1 && <p>Duración estimada: {minutes(m)} <small>(a 4 km/h, sin paradas ni desnivel)</small></p>}
       <p className="warnings" role="note">Trazado manual — no es una ruta validada; puede cruzar fincas, carreteras o zonas no transitables.</p>
     </section>
   )
 }
 
-function Details({ route, metadata, onPlan }: { route: RouteFeature; metadata: Metadata | null; onPlan: (seed?: Position[]) => void }) {
+type RouteElevation = { meta: ElevationMeta; profile: Profile } | null
+
+function Details({ route, metadata, onPlan, elevation }: { route: RouteFeature; metadata: Metadata | null; onPlan: (seed?: Position[]) => void; elevation: RouteElevation }) {
   const p = route.properties
   const [more, setMore] = useState(false)
   const [shareMsg, share] = useShare()
@@ -312,10 +384,17 @@ function Details({ route, metadata, onPlan }: { route: RouteFeature; metadata: M
           {lengthMismatch(p) && <small className="mismatch">El track oficial no coincide con la distancia publicada (puede estar incompleto o incluir variantes).</small>}
         </dd>
         <dt>Desnivel oficial</dt><dd>{p.elevationGainM === null ? 'No publicado' : `${p.elevationGainM} m`}</dd>
+        {elevation && (
+          <>
+            <dt>Desnivel calculado</dt><dd>{gainText(elevation.profile)} <small>(modelo digital del terreno {elevation.meta.source})</small></dd>
+            <dt>Altitud calculada</dt><dd>{meters(elevation.profile.minM)} – {meters(elevation.profile.maxM)}</dd>
+          </>
+        )}
         <dt>Tipo</dt><dd>{orNA(p.type)}</dd>
         <dt>Sector</dt><dd>{orNA(p.sector)}</dd>
         <dt>Municipios</dt><dd>{orNA(p.municipalities.join(', '))}</dd>
       </dl>
+      {elevation && <ElevationProfile data={elevation.profile} label="Perfil de elevación calculado" />}
       {metadata && (
         <p className="note">
           Datos oficiales: <a href={metadata.sourceUrl} target="_blank" rel="noopener noreferrer">{metadata.source}</a>, extraídos el {longDate(metadata.extractedAt)}.
@@ -330,7 +409,9 @@ function Details({ route, metadata, onPlan }: { route: RouteFeature; metadata: M
         {p.description?.split(/\n\s*\n/).map((para, i) => <p key={i}>{para}</p>)}
       </div>
       {long && <button type="button" aria-expanded={more} aria-controls={`desc-${p.id}`} onClick={() => setMore(!more)}>{more ? 'Leer menos' : 'Leer más'}</button>}
-      <p className="note">Los tracks oficiales no incluyen datos de altitud; no se muestra perfil de elevación.</p>
+      {elevation ? <ElevationNote meta={elevation.meta} /> : (
+        <p className="note">Los tracks oficiales no incluyen datos de altitud; no se muestra perfil de elevación.</p>
+      )}
     </article>
   )
 }

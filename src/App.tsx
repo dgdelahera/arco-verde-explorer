@@ -8,6 +8,7 @@ import { useOnline } from './online'
 import { Panel, type LocateStatus } from './Panel'
 import { decodePlan, loadDraft, MAX_POINTS, round5, saveDraft } from './plan'
 import { osmUrl, parsePois, POI_CATEGORIES, searchPois, type PoiCategory, type PoiFeature, type PoisData } from './pois'
+import { parseElevation, type ElevationData } from './elevation'
 
 const NETWORK = '#0072b2'
 const SELECTED = '#c2185b'
@@ -242,6 +243,7 @@ function PlanLayer({ points, edit }: { points: Position[]; edit: Edit }) {
 
 export default function App() {
   const [data, setData] = useState<RoutesData | null>(null)
+  const [elevation, setElevation] = useState<ElevationData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState(emptyFilters)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -287,6 +289,10 @@ export default function App() {
       })
       .then((json) => setData(parseRoutes(json)))
       .catch((e: Error) => setError(e.message))
+    fetch('/data/elevation.json')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setElevation(parseElevation(json)))
+      .catch(() => {})
   }, [])
 
   const startPlan = useCallback((seed?: Position[]) => {
@@ -412,6 +418,7 @@ export default function App() {
         }}
         onPlan={startPlan}
         pois={{ active: poiCats, toggle: togglePoi, status: typeof pois === 'object' ? 'ready' : pois, metadata: poiData?.metadata ?? null, matches: poiMatches, focus: focusPoi }}
+        elevation={elevation}
       />
       <section className="map" aria-label="Mapa de rutas">
         <MapContainer ref={mapRef} bounds={bounds} maxBounds={network?.pad(3)} maxBoundsViscosity={1} maxZoom={19} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
