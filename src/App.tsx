@@ -82,7 +82,12 @@ function FitBounds({ bounds, nonce }: { bounds: LatLngBounds; nonce: number }) {
   useEffect(() => {
     if (!bounds.isValid()) return
     const sheet = media('(max-width: 767px)') ? (document.querySelector<HTMLElement>('.panel')?.offsetHeight ?? 0) : 0
-    map.fitBounds(bounds, { paddingTopLeft: [24, 24], paddingBottomRight: [24, 24 + sheet], animate: !media('(prefers-reduced-motion: reduce)') })
+    const box = map.getContainer().getBoundingClientRect()
+    const ctl = map.getContainer().querySelector('.leaflet-top.leaflet-left')!.getBoundingClientRect()
+    const [w, h] = [ctl.right - box.left, ctl.bottom - box.top]
+    // Padding is a rectangle, so clear the corner controls along whichever side costs less of the visible map.
+    const [left, top] = w / box.width < h / (box.height - sheet) ? [w, 0] : [0, h]
+    map.fitBounds(bounds, { paddingTopLeft: [24 + left, 48 + top], paddingBottomRight: [24, 24 + sheet], animate: !media('(prefers-reduced-motion: reduce)') })
   }, [map, bounds, nonce])
   return null
 }
@@ -187,7 +192,7 @@ function PlanLayer({ points, edit }: { points: Position[]; edit: Edit }) {
   }, [map, edit])
   return (
     <Pane name="plan" style={{ zIndex: 440 }}>
-      <Polyline positions={points.map(([lon, lat]) => [lat, lon])} pathOptions={{ color: PLAN, weight: 4, dashArray: '8 6', interactive: false }} />
+      <Polyline positions={points.map(([lon, lat]): LatLngTuple => [lat, lon])} pathOptions={{ color: PLAN, weight: 4, dashArray: '8 6', interactive: false }} />
       {points.map(([lon, lat], i) => (
         <Marker key={i} position={[lat, lon]} icon={pin(i + 1)} draggable title={`Punto ${i + 1}: arrástralo para moverlo o púlsalo para eliminarlo`} eventHandlers={{
           dragend: (e) => { dragEnd.current = Date.now(); const ll = e.target.getLatLng(); edit((p) => p.map((q, j) => (j === i ? [round5(ll.lng), round5(ll.lat)] : q))) },
@@ -210,6 +215,7 @@ export default function App() {
   const [nearMe, setNearMe] = useState(false)
   const [plan, setPlan] = useState<{ points: Position[]; past: Position[][]; edited?: boolean } | null>(null)
   const [planView, setPlanView] = useState<LatLngBounds | null>(null)
+  const mapRef = useRef<LeafletMap>(null)
 
   useEffect(() => {
     fetch('/data/routes.geojson')
@@ -332,12 +338,19 @@ export default function App() {
           canUndo: plan.past.length > 0,
           undo: () => setPlan({ points: plan.past.at(-1)!, past: plan.past.slice(0, -1), edited: true }),
           clear: () => editPlan(() => []),
+          addCenter: () => {
+            const map = mapRef.current!
+            const box = map.getContainer().getBoundingClientRect()
+            const x = document.querySelector('.crosshair')!.getBoundingClientRect()
+            const ll = map.containerPointToLatLng([x.left + x.width / 2 - box.left, x.top + x.height / 2 - box.top])
+            editPlan((p) => [...p, [round5(ll.lng), round5(ll.lat)]])
+          },
           exit: () => { setPlan(null); setPlanView(null) },
         }}
         onPlan={startPlan}
       />
       <section className="map" aria-label="Mapa de rutas">
-        <MapContainer bounds={bounds} maxBounds={network?.pad(3)} maxBoundsViscosity={1} maxZoom={19} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
+        <MapContainer ref={mapRef} bounds={bounds} maxBounds={network?.pad(3)} maxBoundsViscosity={1} maxZoom={19} className="leaflet-map" zoomControl={false} attributionControl={false} zoomAnimation={!reduce} fadeAnimation={!reduce} markerZoomAnimation={!reduce}>
           <MapSetup network={network} />
           <ZoomControl zoomInTitle="Acercar" zoomOutTitle="Alejar" />
           <ShowAllControl onClick={showAll} />
@@ -355,6 +368,7 @@ export default function App() {
           {plan ? <PlanLayer points={plan.points} edit={editPlan} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
           <FitBounds bounds={bounds} nonce={fitNonce} />
         </MapContainer>
+        {plan && <div className="crosshair" aria-hidden="true" />}
       </section>
     </div>
   )
