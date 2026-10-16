@@ -1,4 +1,4 @@
-import { lengthMeters, type Position } from './geo'
+import { lengthMeters, snapToNetwork, type Position } from './geo'
 
 export const MAX_POINTS = 200
 const KEY = 'arco-verde-plan'
@@ -28,8 +28,16 @@ export function decodePlan(hash: string): Position[] | null {
   return points
 }
 
+export const onNetwork = (points: Position[], tracks: GeoJSON.Geometry[]) => points.every((p) => snapToNetwork(p, tracks))
+
 export function loadDraft(): Position[] {
   try { return decodePlan(localStorage.getItem(KEY) ?? '') ?? [] } catch { return [] }
+}
+
+/** The saved draft, or null when it has points off the network and cannot be opened. */
+export function openableDraft(tracks: GeoJSON.Geometry[]): Position[] | null {
+  const draft = loadDraft()
+  return onNetwork(draft, tracks) ? draft : null
 }
 
 export function saveDraft(points: Position[]) {
