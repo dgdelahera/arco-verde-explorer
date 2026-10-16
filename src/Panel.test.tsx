@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { act } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { emptyFilters, filterRoutes, parseRoutes } from './filters'
-import { Panel, type LocateStatus, type Planner } from './Panel'
+import { Panel, type LocateStatus, type Planner, type PoiPanel } from './Panel'
+import type { PoiFeature } from './pois'
 import { fixture } from './test/fixture'
 
 afterEach(cleanup)
@@ -16,14 +17,16 @@ const withProps = (id: string, extra: object) => ({
   routes: data.routes.map((r) => (r.properties.id === id ? { ...r, properties: { ...r.properties, ...extra } } : r)),
 })
 
-function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle', planner = null, onPlan = () => {} }: {
+const noPois: PoiPanel = { active: new Set(), toggle: () => {}, status: 'idle', metadata: null, matches: [], focus: () => {} }
+
+function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle', planner = null, onPlan = () => {}, pois = noPois }: {
   onSelect?: (id: string | null) => void; selectedId?: string | null; d?: typeof data; distances?: Map<string, number> | null; locateStatus?: LocateStatus
-  planner?: Planner | null; onPlan?: (seed?: number[][]) => void
+  planner?: Planner | null; onPlan?: (seed?: number[][]) => void; pois?: PoiPanel
 }) {
   const [filters, setFilters] = useState(emptyFilters)
   return (
     <Panel data={d} visible={filterRoutes(d.routes, filters)} filters={filters} onFiltersChange={setFilters}
-      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} />
+      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} pois={pois} />
   )
 }
 
@@ -146,7 +149,7 @@ it('moves focus to the route list after clearing filters', () => {
 
 it('keeps Cerca de mí focusable while locating and ignores clicks', () => {
   const onLocate = vi.fn()
-  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} planner={null} onPlan={() => {}} />)
+  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} planner={null} onPlan={() => {}} pois={noPois} />)
   const btn = screen.getByRole('button', { name: 'Cerca de mí' })
   expect(btn).not.toBeDisabled()
   expect(btn).toHaveAttribute('aria-disabled', 'true')
@@ -276,4 +279,21 @@ it('adds a planner point at the map centre from the keyboard', () => {
   expect(planner.addCenter).toHaveBeenCalledOnce()
   rerender(<Harness selectedId={null} planner={{ ...planner, points: Array.from({ length: 200 }, () => [-3.7, 40.4]) }} />)
   expect(screen.getByRole('button', { name: 'Añadir punto en el centro del mapa' })).toBeDisabled()
+})
+
+it('toggles POI categories, lists matching places and credits OpenStreetMap', () => {
+  const fuente: PoiFeature = { type: 'Feature', geometry: { type: 'Point', coordinates: [-3.8, 40.5] }, properties: { id: 'node/1', name: 'Fuente del Pino', category: 'fuente' } }
+  const pois = { ...noPois, active: new Set(['transporte'] as const), toggle: vi.fn(), focus: vi.fn(), status: 'error' as const, matches: [fuente], metadata: data.metadata }
+  render(<Harness pois={pois} />)
+  const chips = within(screen.getByRole('group', { name: 'Puntos de interés' }))
+  expect(chips.getByRole('checkbox', { name: /Estaciones/ })).toBeChecked()
+  fireEvent.click(chips.getByRole('checkbox', { name: /Fuentes/ }))
+  expect(pois.toggle).toHaveBeenCalledWith('fuente')
+  expect(chips.getByRole('status')).toHaveTextContent('No se pudieron cargar los puntos de interés')
+  fireEvent.click(within(screen.getByRole('list', { name: 'Lugares cercanos a las rutas' })).getByRole('button', { name: /Fuente del Pino/ }))
+  expect(pois.focus).toHaveBeenCalledWith(fuente)
+  fireEvent.change(screen.getByLabelText(/Buscar/), { target: { value: 'zzz' } })
+  expect(screen.getByText(/Ninguna ruta coincide con los filtros, pero hay un lugar con ese nombre/)).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'OpenStreetMap contributors' })).toHaveAttribute('href', 'https://www.openstreetmap.org/copyright')
+  expect(screen.getByText(/ODbL, extraídos el 14 de octubre de 2026/)).toBeInTheDocument()
 })

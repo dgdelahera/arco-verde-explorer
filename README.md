@@ -13,7 +13,9 @@ Es una web estática (React + TypeScript + Leaflet) servida con nginx. No tiene 
 - Los GPX oficiales no traen altitud, así que no hay perfil de elevación. Se muestra el desnivel oficial.
 - "Descargar GPX" genera en el navegador un GPX con el nombre de la ruta a partir de esa geometría depurada (margen de unos 5 m). El GPX original de comunidad.madrid sigue enlazado en la ficha.
 
-Fuente: Comunidad de Madrid, comunidad.madrid/medio-ambiente/arco-verde. Mapa base © OpenStreetMap contributors.
+`npm run pois` hace una consulta a la Overpass API de OpenStreetMap y genera `public/data/pois.geojson`: fuentes de agua potable, merenderos y refugios, y estaciones de tren, Cercanías, Metro y Metro Ligero a menos de 300 m de algún track. También se versiona. En el mapa cada categoría se activa por separado y todas empiezan apagadas. El buscador encuentra también estos lugares por su nombre. Son datos comunitarios, no oficiales.
+
+Fuente: Comunidad de Madrid, comunidad.madrid/medio-ambiente/arco-verde. Mapa base y puntos de interés © OpenStreetMap contributors, bajo licencia [ODbL](https://www.openstreetmap.org/copyright).
 
 ## Desarrollo
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { distinct, emptyFilters, lengthMismatch, type Filters, type Metadata, type RouteFeature, type RoutesData } from './filters'
 import { directionsUrls, routeEnds, toGpx, type Position } from './geo'
 import { MAX_POINTS, planHash, planLine, planMeters } from './plan'
+import { POI_CATEGORIES, type PoiCategory, type PoiFeature } from './pois'
 
 export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
 const LOCATE_MESSAGES: Partial<Record<LocateStatus, string>> = {
@@ -55,6 +56,17 @@ function useShare() {
   return [msg, share] as const
 }
 
+export type PoiPanel = {
+  active: Set<PoiCategory>
+  toggle: (c: PoiCategory) => void
+  status: 'idle' | 'loading' | 'error' | 'ready'
+  metadata: Metadata | null
+  matches: PoiFeature[]
+  focus: (f: PoiFeature) => void
+}
+
+const Badge = ({ c }: { c: PoiCategory }) => <i className="poi-badge" style={{ background: POI_CATEGORIES[c].color }} aria-hidden="true">{POI_CATEGORIES[c].letter}</i>
+
 export type Planner = { points: Position[]; canUndo: boolean; undo: () => void; clear: () => void; exit: () => void; addCenter: () => void }
 
 const summary = (p: RouteFeature['properties']) =>
@@ -72,9 +84,10 @@ type Props = {
   onLocate: () => void
   planner: Planner | null
   onPlan: (seed?: Position[]) => void
+  pois: PoiPanel
 }
 
-export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan }: Props) {
+export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan, pois }: Props) {
   const [open, setOpen] = useState(true)
   const [full, setFull] = useState(false)
   const props = data.routes.map((r) => r.properties)
@@ -120,9 +133,23 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
         <details className="filters-box" open={filtersOpen}>
           <summary className="section-title">Filtros{active > 0 && ` (${active})`}</summary>
           <form className="filters" role="search" onSubmit={(e) => e.preventDefault()}>
-            <label className="wide">Buscar por nombre o municipio
+            <label className="wide">Buscar por nombre, municipio o lugar
               <input type="search" name="q" value={filters.q} onChange={set('q')} />
             </label>
+            {pois.matches.length > 0 && (
+              <div className="wide poi-results">
+                <p id="poi-results-title">Lugares cercanos a las rutas</p>
+                <ul aria-labelledby="poi-results-title">
+                  {pois.matches.map((f) => (
+                    <li key={f.properties.id}>
+                      <button type="button" onClick={() => pois.focus(f)}>
+                        <Badge c={f.properties.category} /> {f.properties.name} <small>· {POI_CATEGORIES[f.properties.category].one}</small>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <label>Municipio
               <select name="municipality" value={filters.municipality} onChange={set('municipality')}>
                 <option value="">Todos</option>
@@ -162,6 +189,19 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
           </fieldset>
         )}
 
+        <fieldset className="type-chips poi-chips">
+          <legend>Puntos de interés</legend>
+          {(Object.keys(POI_CATEGORIES) as PoiCategory[]).map((c) => (
+            <label key={c}>
+              <input type="checkbox" checked={pois.active.has(c)} onChange={() => pois.toggle(c)} />
+              <Badge c={c} /> {POI_CATEGORIES[c].label}
+            </label>
+          ))}
+          <p role="status" className="poi-msg" data-error={pois.status === 'error'}>
+            {pois.status === 'loading' ? 'Cargando puntos de interés…' : pois.status === 'error' ? 'No se pudieron cargar los puntos de interés. Desactívala y vuelve a activarla para reintentar.' : ''}
+          </p>
+        </fieldset>
+
         <div className="nearby">
           <button type="button" onClick={() => locateStatus !== 'loading' && onLocate()} aria-disabled={locateStatus === 'loading'}>Cerca de mí</button>
           <button type="button" onClick={() => onPlan()}>Crear ruta</button>
@@ -178,7 +218,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
         {visible.length === 0 && (
           <div className="empty">
-            <p>Ninguna ruta coincide con los filtros</p>
+            <p>Ninguna ruta coincide con los filtros{pois.matches.length > 0 && `, pero hay ${pois.matches.length === 1 ? 'un lugar' : `${pois.matches.length} lugares`} con ese nombre en «Lugares cercanos a las rutas», junto al buscador`}</p>
             <button type="button" onClick={() => { onFiltersChange(emptyFilters); routesHeading.current?.focus() }}>Limpiar filtros</button>
           </div>
         )}
@@ -205,6 +245,10 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
               extraído el {longDate(data.metadata.extractedAt)}.
             </p>
           )}
+          <p>
+            Puntos de interés a menos de 300 m de las rutas: © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>, ODbL
+            {pois.metadata && `, extraídos el ${longDate(pois.metadata.extractedAt)}`}. Información comunitaria, no oficial.
+          </p>
           <p>No implica respaldo de la Comunidad de Madrid.</p>
         </footer>
       </div>

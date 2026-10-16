@@ -51,7 +51,7 @@ export function parseRoutes(json: unknown): RoutesData {
   return { routes, metadata: fc.metadata ?? null }
 }
 
-const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[\s-]/g, '')
+export const norm = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[\s-]/g, '')
 const num = (s: string) => {
   const n = Number(s.trim().replace(',', '.'))
   return s.trim() === '' || !Number.isFinite(n) ? null : n
