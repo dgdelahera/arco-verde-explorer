@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { act } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { emptyFilters, filterRoutes, parseRoutes } from './filters'
-import { Panel, type LocateStatus } from './Panel'
+import { Panel, type LocateStatus, type Planner } from './Panel'
 import { fixture } from './test/fixture'
 
 afterEach(cleanup)
@@ -16,13 +16,14 @@ const withProps = (id: string, extra: object) => ({
   routes: data.routes.map((r) => (r.properties.id === id ? { ...r, properties: { ...r.properties, ...extra } } : r)),
 })
 
-function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle' }: {
+function Harness({ onSelect = () => {}, selectedId = 'RL2', d = data, distances = null, locateStatus = 'idle', planner = null, onPlan = () => {} }: {
   onSelect?: (id: string | null) => void; selectedId?: string | null; d?: typeof data; distances?: Map<string, number> | null; locateStatus?: LocateStatus
+  planner?: Planner | null; onPlan?: (seed?: number[][]) => void
 }) {
   const [filters, setFilters] = useState(emptyFilters)
   return (
     <Panel data={d} visible={filterRoutes(d.routes, filters)} filters={filters} onFiltersChange={setFilters}
-      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} />
+      selectedId={selectedId} onSelect={onSelect} distances={distances} locateStatus={locateStatus} onLocate={() => {}} planner={planner} onPlan={onPlan} />
   )
 }
 
@@ -145,7 +146,7 @@ it('moves focus to the route list after clearing filters', () => {
 
 it('keeps Cerca de mí focusable while locating and ignores clicks', () => {
   const onLocate = vi.fn()
-  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} />)
+  render(<Panel data={data} visible={data.routes} filters={emptyFilters} onFiltersChange={() => {}} selectedId={null} onSelect={() => {}} distances={null} locateStatus="loading" onLocate={onLocate} planner={null} onPlan={() => {}} />)
   const btn = screen.getByRole('button', { name: 'Cerca de mí' })
   expect(btn).not.toBeDisabled()
   expect(btn).toHaveAttribute('aria-disabled', 'true')
@@ -235,4 +236,33 @@ it('uses a fixed label with aria-pressed for the size toggle', () => {
   expect(btn).toHaveAttribute('aria-pressed', 'false')
   fireEvent.click(btn)
   expect(screen.getByRole('button', { name: 'Ampliar panel' })).toHaveAttribute('aria-pressed', 'true')
+})
+
+it('offers the planner and seeds it from the selected route start', () => {
+  const onPlan = vi.fn()
+  render(<Harness onPlan={onPlan} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Crear ruta' }))
+  expect(onPlan).toHaveBeenCalledWith()
+  fireEvent.click(screen.getByRole('button', { name: 'Empezar desde esta ruta' }))
+  expect(onPlan).toHaveBeenLastCalledWith([[-3.7, 40.6]])
+})
+
+it('shows planner metrics, labels and controls', async () => {
+  const planner = { points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn() }
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.assign(navigator, { clipboard: { writeText }, share: undefined })
+  render(<Harness selectedId={null} planner={planner} />)
+  const section = within(screen.getByRole('region', { name: 'Crear ruta' }))
+  expect(section.getByText(/Distancia: 1 km/).closest('p')).toHaveTextContent('Distancia: 1 km · 2 puntos')
+  expect(section.getByText('Desnivel: no disponible (sin datos de altitud)')).toBeInTheDocument()
+  expect(section.getByText(/Duración estimada: 15 min/)).toHaveTextContent('a 4 km/h')
+  expect(section.getByRole('note')).toHaveTextContent('Trazado manual — no es una ruta validada; puede cruzar fincas, carreteras o zonas no transitables.')
+  expect(section.getByRole('button', { name: 'Deshacer' })).toBeDisabled()
+  fireEvent.click(section.getByRole('button', { name: 'Borrar' }))
+  fireEvent.click(section.getByRole('button', { name: 'Salir' }))
+  expect(planner.clear).toHaveBeenCalledOnce()
+  expect(planner.exit).toHaveBeenCalledOnce()
+  fireEvent.click(section.getByRole('button', { name: 'Compartir' }))
+  expect(await section.findByText('Enlace copiado')).toBeInTheDocument()
+  expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/#plan=40\.4168,-3\.7038;40\.4193,-3\.6921$/))
 })

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { distinct, emptyFilters, lengthMismatch, type Filters, type Metadata, type RouteFeature, type RoutesData } from './filters'
-import { directionsUrls, toGpx } from './geo'
+import { directionsUrls, routeEnds, toGpx, type Position } from './geo'
+import { MAX_POINTS, planHash, planLine, planMeters } from './plan'
 
 export type LocateStatus = 'idle' | 'loading' | 'done' | 'denied' | 'error' | 'unsupported'
 const LOCATE_MESSAGES: Partial<Record<LocateStatus, string>> = {
@@ -18,6 +19,44 @@ const longDate = (iso: string) => {
 
 const km = (n: number) => `${n.toLocaleString('es-ES', { maximumFractionDigits: 1 })} km`
 const orNA = (v: string | number | null) => (v === null || v === '' ? 'No publicado' : v)
+const minutes = (m: number) => {
+  const t = Math.max(5, Math.round(m / 4000 * 12) * 5)
+  return t < 60 ? `${t} min` : `${Math.floor(t / 60)} h ${t % 60} min`
+}
+
+function download(filename: string, gpx: string) {
+  const url = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+function useShare() {
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    if (!msg) return
+    const t = setTimeout(() => setMsg(''), 3000)
+    return () => clearTimeout(t)
+  }, [msg])
+  const share = async (title: string, url: string) => {
+    if (navigator.share) {
+      try { return await navigator.share({ title, url }) } catch (e) { if ((e as Error).name === 'AbortError') return }
+    }
+    try {
+      await navigator.clipboard.writeText(url)
+      setMsg('Enlace copiado')
+    } catch {
+      window.prompt('Copia el enlace', url)
+      setMsg('No se pudo copiar el enlace')
+    }
+  }
+  return [msg, share] as const
+}
+
+export type Planner = { points: Position[]; canUndo: boolean; undo: () => void; clear: () => void; exit: () => void }
+
 const summary = (p: RouteFeature['properties']) =>
   [CATEGORY[p.category], p.type, p.elevationGainM !== null && `desnivel ${p.elevationGainM} m`].filter(Boolean).join(' · ')
 
@@ -31,9 +70,11 @@ type Props = {
   distances: Map<string, number> | null
   locateStatus: LocateStatus
   onLocate: () => void
+  planner: Planner | null
+  onPlan: (seed?: Position[]) => void
 }
 
-export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate }: Props) {
+export function Panel({ data, visible, filters, onFiltersChange, selectedId, onSelect, distances, locateStatus, onLocate, planner, onPlan }: Props) {
   const [open, setOpen] = useState(true)
   const [full, setFull] = useState(false)
   const props = data.routes.map((r) => r.properties)
@@ -57,7 +98,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
   }, [selectedId])
 
   return (
-    <main className="panel" data-open={open} data-full={full}>
+    <main className="panel" data-open={open} data-full={full} data-planning={!!planner}>
       <header className="panel-header">
         <h1>Arco Verde Explorer</h1>
         <button type="button" className="sheet-toggle" aria-label={open ? 'Ocultar panel' : 'Mostrar panel'} aria-expanded={open} aria-controls="panel-body" onClick={() => setOpen(!open)}>
@@ -69,6 +110,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
       </header>
 
       <div id="panel-body" className="panel-body">
+        {planner && <PlannerSection planner={planner} />}
         {data.metadata && (
           <p className="intro">
             {data.routes.length} rutas oficiales del Arco Verde de la Comunidad de Madrid.{' '}
@@ -122,6 +164,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
         <div className="nearby">
           <button type="button" onClick={() => locateStatus !== 'loading' && onLocate()} aria-disabled={locateStatus === 'loading'}>Cerca de mí</button>
+          <button type="button" onClick={() => onPlan()}>Crear ruta</button>
           <p role="status" className="locate-msg" data-error={locateStatus !== 'idle' && locateStatus !== 'loading' && locateStatus !== 'done'}>{LOCATE_MESSAGES[locateStatus]}</p>
         </div>
 
@@ -150,7 +193,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
                 </span>
                 <span className="route-km">{km(p.distanceKm ?? p.computedLengthKm)}</span>
               </button>
-              {p.id === selectedId && <Details route={feature} metadata={data.metadata} />}
+              {p.id === selectedId && <Details route={feature} metadata={data.metadata} onPlan={onPlan} />}
             </li>
           )})}
         </ul>
@@ -169,47 +212,48 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
   )
 }
 
-function Details({ route, metadata }: { route: RouteFeature; metadata: Metadata | null }) {
+const pageUrl = (hash: string) => `${location.href.split('#')[0]}${hash}`
+
+function PlannerSection({ planner: { points, canUndo, undo, clear, exit } }: { planner: Planner }) {
+  const [shareMsg, share] = useShare()
+  const m = planMeters(points)
+  return (
+    <section className="planner" aria-labelledby="planner-heading">
+      <h2 className="section-title" id="planner-heading">Crear ruta</h2>
+      <p className="note">Toca el mapa para añadir puntos. Arrástralos para moverlos o púlsalos para eliminarlos.</p>
+      <div className="actions">
+        <button type="button" onClick={undo} disabled={!canUndo}>Deshacer</button>
+        <button type="button" onClick={clear} disabled={!points.length}>Borrar</button>
+        <button type="button" onClick={exit}>Salir</button>
+        <button type="button" className="btn primary" disabled={points.length < 2} onClick={() => download('arco-verde-trazado.gpx', toGpx('Trazado manual', planLine(points)))}>Descargar GPX</button>
+        <button type="button" disabled={!points.length} onClick={() => share('Trazado manual', pageUrl(planHash(points)))}>Compartir</button>
+        <span role="status" className="note">{shareMsg}</span>
+      </div>
+      <p aria-live="polite"><strong>Distancia: {km(m / 1000)}</strong> · {points.length} {points.length === 1 ? 'punto' : 'puntos'}{points.length >= MAX_POINTS && ` (máximo ${MAX_POINTS})`}</p>
+      <p>Desnivel: no disponible (sin datos de altitud)</p>
+      {points.length > 1 && <p>Duración estimada: {minutes(m)} <small>(a 4 km/h, sin paradas ni desnivel)</small></p>}
+      <p className="warnings" role="note">Trazado manual — no es una ruta validada; puede cruzar fincas, carreteras o zonas no transitables.</p>
+    </section>
+  )
+}
+
+function Details({ route, metadata, onPlan }: { route: RouteFeature; metadata: Metadata | null; onPlan: (seed?: Position[]) => void }) {
   const p = route.properties
   const [more, setMore] = useState(false)
-  const [shareMsg, setShareMsg] = useState('')
+  const [shareMsg, share] = useShare()
   const directions = directionsUrls(route.geometry, p.type)
-  const downloadGpx = () => {
-    const url = URL.createObjectURL(new Blob([toGpx(`${p.id} ${p.name}`, route.geometry)], { type: 'application/gpx+xml' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `arco-verde-${p.id}.gpx`
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(url), 60_000)
-  }
+  const start = routeEnds(route.geometry)?.start
   const long = (p.description?.length ?? 0) > 280
-  useEffect(() => {
-    if (!shareMsg) return
-    const t = setTimeout(() => setShareMsg(''), 3000)
-    return () => clearTimeout(t)
-  }, [shareMsg])
-  const share = async () => {
-    const url = `${location.href.split('#')[0]}#${p.id}`
-    if (navigator.share) {
-      try { return await navigator.share({ title: p.name, url }) } catch (e) { if ((e as Error).name === 'AbortError') return }
-    }
-    try {
-      await navigator.clipboard.writeText(url)
-      setShareMsg('Enlace copiado')
-    } catch {
-      window.prompt('Copia el enlace', url)
-      setShareMsg('No se pudo copiar el enlace')
-    }
-  }
   return (
     <article className="details" aria-label={`Detalles de ${p.name}`}>
       <h3>{p.name} <span className="route-id">{p.id}</span></h3>
       <div className="actions">
-        <button type="button" className="btn primary" onClick={downloadGpx}>Descargar GPX</button>
+        <button type="button" className="btn primary" onClick={() => download(`arco-verde-${p.id}.gpx`, toGpx(`${p.id} ${p.name}`, route.geometry))}>Descargar GPX</button>
         {directions && <a className="btn" href={directions.toStart} target="_blank" rel="noopener noreferrer">Cómo llegar al inicio</a>}
         {directions?.fromEnd && <a className="btn" href={directions.fromEnd} target="_blank" rel="noopener noreferrer">Volver desde el final</a>}
         {p.planUrl && <a className="btn" href={p.planUrl} target="_blank" rel="noopener noreferrer">Plano (PDF)</a>}
-        <button type="button" onClick={share}>Compartir</button>
+        <button type="button" onClick={() => share(p.name, pageUrl(`#${p.id}`))}>Compartir</button>
+        {start && <button type="button" onClick={() => onPlan([start])}>Empezar desde esta ruta</button>}
         <span role="status" className="note">{shareMsg}</span>
       </div>
       {p.notice && <p className="warnings" role="note"><strong>Aviso oficial:</strong> {p.notice}</p>}
