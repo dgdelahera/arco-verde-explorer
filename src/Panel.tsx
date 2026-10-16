@@ -55,7 +55,7 @@ function useShare() {
   return [msg, share] as const
 }
 
-export type Planner = { points: Position[]; canUndo: boolean; undo: () => void; clear: () => void; exit: () => void }
+export type Planner = { points: Position[]; canUndo: boolean; undo: () => void; clear: () => void; exit: () => void; addCenter: () => void }
 
 const summary = (p: RouteFeature['properties']) =>
   [CATEGORY[p.category], p.type, p.elevationGainM !== null && `desnivel ${p.elevationGainM} m`].filter(Boolean).join(' · ')
@@ -214,7 +214,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
 
 const pageUrl = (hash: string) => `${location.href.split('#')[0]}${hash}`
 
-function PlannerSection({ planner: { points, canUndo, undo, clear, exit } }: { planner: Planner }) {
+function PlannerSection({ planner: { points, canUndo, undo, clear, exit, addCenter } }: { planner: Planner }) {
   const [shareMsg, share] = useShare()
   const m = planMeters(points)
   return (
@@ -222,6 +222,7 @@ function PlannerSection({ planner: { points, canUndo, undo, clear, exit } }: { p
       <h2 className="section-title" id="planner-heading">Crear ruta</h2>
       <p className="note">Toca el mapa para añadir puntos. Arrástralos para moverlos o púlsalos para eliminarlos.</p>
       <div className="actions">
+        <button type="button" onClick={addCenter} disabled={points.length >= MAX_POINTS}>Añadir punto en el centro del mapa</button>
         <button type="button" onClick={undo} disabled={!canUndo}>Deshacer</button>
         <button type="button" onClick={clear} disabled={!points.length}>Borrar</button>
         <button type="button" onClick={exit}>Salir</button>

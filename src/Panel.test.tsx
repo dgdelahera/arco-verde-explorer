@@ -248,7 +248,7 @@ it('offers the planner and seeds it from the selected route start', () => {
 })
 
 it('shows planner metrics, labels and controls', async () => {
-  const planner = { points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn() }
+  const planner = { points: [[-3.7038, 40.4168], [-3.6921, 40.4193]], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
   const writeText = vi.fn().mockResolvedValue(undefined)
   Object.assign(navigator, { clipboard: { writeText }, share: undefined })
   render(<Harness selectedId={null} planner={planner} />)
@@ -265,4 +265,15 @@ it('shows planner metrics, labels and controls', async () => {
   fireEvent.click(section.getByRole('button', { name: 'Compartir' }))
   expect(await section.findByText('Enlace copiado')).toBeInTheDocument()
   expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/#plan=40\.4168,-3\.7038;40\.4193,-3\.6921$/))
+})
+
+it('adds a planner point at the map centre from the keyboard', () => {
+  const planner = { points: [], canUndo: false, undo: vi.fn(), clear: vi.fn(), exit: vi.fn(), addCenter: vi.fn() }
+  const { rerender } = render(<Harness selectedId={null} planner={planner} />)
+  const add = screen.getByRole('button', { name: 'Añadir punto en el centro del mapa' })
+  add.focus()
+  fireEvent.click(add)
+  expect(planner.addCenter).toHaveBeenCalledOnce()
+  rerender(<Harness selectedId={null} planner={{ ...planner, points: Array.from({ length: 200 }, () => [-3.7, 40.4]) }} />)
+  expect(screen.getByRole('button', { name: 'Añadir punto en el centro del mapa' })).toBeDisabled()
 })

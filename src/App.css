@@ -102,6 +102,8 @@ button[aria-disabled='true'] { opacity: 0.6; cursor: progress; }
 .panel[data-planning='true'] .panel-body > :not(.planner, .attribution) { display: none; }
 .planner p { margin: 0 0 0.4rem; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+.map { position: relative; }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 28px; height: 28px; margin: -14px 0 0 -14px; z-index: 500; pointer-events: none; background: linear-gradient(#e66100, #e66100) center / 2px 100% no-repeat, linear-gradient(#e66100, #e66100) center / 100% 2px no-repeat; filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff); }
 .plan-pin { display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #e66100; border: 3px solid #fff; color: #fff; font-weight: 700; font-size: 0.8rem; box-shadow: 0 1px 4px rgb(0 0 0 / 0.4); }
 
 .attribution { margin-top: 1rem; padding-top: 0.5rem; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
@@ -121,6 +123,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .sheet-toggle { display: inline-block; }
   h1 { font-size: 1rem; }
   .intro { display: none; }
+  .crosshair { top: 27.5dvh; }
 }
 
 @media (pointer: coarse) {
