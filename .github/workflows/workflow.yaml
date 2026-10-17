@@ -62,9 +62,13 @@ jobs:
         run: |
           if [ "$EVENT_NAME" = 'pull_request' ]; then
             tag="pr-${PR_NUMBER}"
-          else
+          elif [ -n "$NEW_TAG" ]; then
             tag="$NEW_TAG"
+          else
+            git fetch --quiet --depth=1 origin '+refs/tags/*:refs/tags/*'
+            tag="$(git tag --points-at HEAD --sort=-v:refname | head -n 1)"
           fi
+          test -n "$tag"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
       - name: Build and push Docker image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
