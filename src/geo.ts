@@ -41,7 +41,7 @@ export function minDistanceToLines(p: Position, polylines: Position[][]): number
   return best
 }
 
-function nearestOnGeometry(point: Position, geometry: GeoJSON.Geometry): { at: Position | null; m: number } {
+export function nearestOnGeometry(point: Position, geometry: GeoJSON.Geometry): { at: Position | null; m: number } {
   const k = Math.cos((point[1] * Math.PI) / 180)
   const flat = (q: Position) => [q[0] * k, q[1]]
   let best: { at: Position | null; m: number } = { at: null, m: Infinity }
