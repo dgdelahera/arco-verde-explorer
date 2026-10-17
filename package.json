@@ -9,9 +9,10 @@
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview",
-    "data": "node scripts/prepare-data.ts && node scripts/elevation.ts",
+    "data": "node scripts/prepare-data.ts && node scripts/elevation.ts && node scripts/prepare-hazards.ts",
     "elevation": "node scripts/elevation.ts",
-    "pois": "node scripts/prepare-pois.ts"
+    "pois": "node scripts/prepare-pois.ts",
+    "hazards": "node scripts/prepare-hazards.ts"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

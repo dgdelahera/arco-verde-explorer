@@ -10,10 +10,12 @@ import { decodePlan, openableDraft, MAX_POINTS, planHash, round5, saveDraft } fr
 import { buildNetwork } from './network'
 import { osmUrl, parsePois, POI_CATEGORIES, searchPois, type PoiCategory, type PoiFeature, type PoisData } from './pois'
 import { parseElevation, type ElevationData } from './elevation'
+import { parseHazards, type HazardFeature } from './hazards'
 
 const NETWORK = '#0072b2'
 const SELECTED = '#c2185b'
 const PLAN = '#e66100'
+const HAZARD = '#b45309'
 const media = (q: string) => matchMedia(q).matches
 
 type Geo = { positions: LatLngTuple[][]; bounds: LatLngBounds }
@@ -128,6 +130,25 @@ function PoiLayer({ pois, focus, onFocused }: { pois: PoiFeature[]; focus: { id:
           </Marker>
         )
       })}
+    </Pane>
+  )
+}
+
+const hazardIcon = divIcon({ className: 'hazard-pin', html: '<span aria-hidden="true">!</span>', iconSize: [28, 26] })
+
+function HazardLayer({ hazards }: { hazards: HazardFeature[] }) {
+  return (
+    <Pane name="hazards" style={{ zIndex: 437 }}>
+      {hazards.map(({ geometry: { coordinates: [lon, lat] }, properties: p }) => (
+        <Marker key={p.id} position={[lat, lon]} icon={hazardIcon} title={`Aviso: ${p.title}`}>
+          {p.path && <Polyline positions={p.path.map(([x, y]): LatLngTuple => [y, x])} pathOptions={{ color: HAZARD, weight: 6, dashArray: '2 8', interactive: false }} />}
+          <Popup>
+            <strong>{p.title}</strong>
+            <p className="hazard-text">«{p.text}»</p>
+            <small>Aviso oficial de {p.routes.map((id, i) => <span key={id}>{i > 0 && ', '}<a href={`#${id}`}>{id}</a></span>)}. Ubicación aproximada.</small>
+          </Popup>
+        </Marker>
+      ))}
     </Pane>
   )
 }
@@ -264,6 +285,7 @@ function PlanLayer({ points, path, edit, snap }: { points: Position[]; path: Pos
 export default function App() {
   const [data, setData] = useState<RoutesData | null>(null)
   const [elevation, setElevation] = useState<ElevationData | null>(null)
+  const [hazards, setHazards] = useState<HazardFeature[]>([])
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState(emptyFilters)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -319,6 +341,10 @@ export default function App() {
     fetch('/data/elevation.json')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => setElevation(parseElevation(json)))
+      .catch(() => {})
+    fetch('/data/hazards.geojson')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setHazards(parseHazards(json)))
       .catch(() => {})
   }, [])
 
@@ -506,6 +532,7 @@ export default function App() {
               <CircleMarker center={[me[1], me[0]]} radius={8} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a56db', fillOpacity: 1, interactive: false }} />
             </Pane>
           )}
+          <HazardLayer hazards={hazards} />
           {!plan && <PoiLayer pois={shownPois} focus={poiFocus} onFocused={clearPoiFocus} />}
           {plan ? <PlanLayer points={plan.points} path={path} edit={editPlan} snap={snap} /> : <Picking visible={visible} geoms={geoms} onSelect={select} />}
           <FitBounds bounds={bounds} nonce={fitNonce} />

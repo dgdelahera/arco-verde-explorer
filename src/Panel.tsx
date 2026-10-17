@@ -238,6 +238,7 @@ export function Panel({ data, visible, filters, onFiltersChange, selectedId, onS
           <span><i className="swatch" /> Red oficial</span>
           <span><i className="swatch selected" /> Ruta seleccionada</span>
           <span><i className="dot start" /><i className="dot end" /> Inicio / Fin</span>
+          <span><i className="hazard-badge" aria-hidden="true">!</i> Tramo con aviso oficial</span>
         </p>
 
         {visible.length === 0 && (

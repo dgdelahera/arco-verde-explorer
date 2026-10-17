@@ -46,7 +46,7 @@ export function overpassToPois(json: { elements: Element[] }, tracks: GeoJSON.Ge
 export const query = ([s, w, n, e]: number[]) =>
   `[out:json][timeout:180][bbox:${s},${w},${n},${e}];(nwr[amenity=drinking_water];nwr[tourism=picnic_site];nwr[amenity=shelter];nwr[railway~"^(station|halt)$"];);out center tags;`
 
-async function overpass(q: string) {
+export async function overpass(q: string) {
   for (let attempt = 0, wait = 30; ; attempt++, wait *= 2) {
     const res = await fetch(OVERPASS, {
       method: 'POST',
